@@ -1,0 +1,31 @@
+vr_mapping:
+  translation_scale_mm_per_m: 900.0
+  # Unity/OpenXR controller coordinates are mapped to robot base TCP deltas.
+  # Each robot axis is a signed Unity axis: x, y, or z.
+  # Field-calibrated physical mapping:
+  #   controller forward  (+z) -> robot physical forward (-y)
+  #   controller right    (+x) -> robot physical right (-x)
+  #   controller up       (+y) -> robot +z
+  robot_x_from: "-x"
+  robot_y_from: "-z"
+  robot_z_from: "+y"
+  # Wrist-axis corrections: align J4/J5/J6 wrist rotation with the controller.
+  robot_rx_from: "+x"
+  robot_ry_from: "+z"
+  robot_rz_from: "-y"
+  deadman_axis: "right_grip"
+  # Position and orientation teleoperation. The adapter locks J6 separately.
+  enable_orientation: true
+  rotation_scale_deg_per_deg: 0.45
+  # Full three-axis wrist rotation in the unlocked-J6 ServoP baseline.
+  lock_controller_twist: false
+  controller_twist_axis: "z"
+  # Low-latency filtering: enough to reject Quest tracking noise without a
+  # visible trailing response during deliberate hand motion.
+  position_smoothing_tau_s: 0.025
+  rotation_smoothing_tau_s: 0.10
+  # A short second-stage filter suppresses ServoP target chatter.
+  target_smoothing_tau_s: 0.035
+  # Ignore tiny controller movements around the clutch reference.
+  position_deadband_m: 0.0025
+  rotation_deadband_deg: 1.2

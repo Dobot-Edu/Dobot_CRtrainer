@@ -1,0 +1,46 @@
+gripper:
+  # PGE-50-26 is controlled through the Dobot tool RS485 bridge.
+  enabled: true
+  driver: "dobot_rtu_60000"
+  port: 60000
+  slave_id: 1
+
+  # Dobot tool RS485 configuration.
+  baud: 115200
+  parity: "N"
+  stop_bits: 1
+
+  # Confirmed gripper Modbus holding-register map.
+  initialize_register: 0x0100
+  # Normal startup homing. Use 0x00A5 only for deliberate full recalibration.
+  initialize_value: 0x0001
+  force_register: 0x0101
+  position_register: 0x0103
+  speed_register: 0x0104
+
+  # 50% force gives the gripper enough margin to continue closing on an object.
+  # The mechanical full-close target remains 0; reduce this for fragile objects.
+  force: 50
+  # Maximum PGE-50-26 motion speed for low-latency VR operation.
+  speed: 100
+  open_position: 1000
+  # PGE position range is 0..1000; 0 is the fully closed target.
+  close_position: 0
+
+  # Quest right index trigger mapping with hysteresis.
+  pressed_closes: true
+  # Allow immediate open/close control at any time during VR teleoperation.
+  require_initial_press_before_open: false
+  open_trigger_threshold: 0.20
+  # Start closing at half trigger travel so the maximum-speed motion begins earlier.
+  close_trigger_threshold: 0.50
+
+  # Wait for register 0x0200 to report initialization success.
+  initialize_timeout_s: 5.0
+  register_delay_s: 0.05
+  # Allow a faster open/close reversal without changing the hardware speed limit.
+  command_interval_s: 0.02
+  feedback_poll_interval_s: 0.10
+  socket_timeout_s: 3.0
+  write_retries: 3
+  retry_delay_s: 0.50

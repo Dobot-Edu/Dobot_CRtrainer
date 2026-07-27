@@ -1,0 +1,9 @@
+vr:
+  listen_ip: "0.0.0.0"
+  listen_port: 5005
+
+robot_network:
+  ip: "192.168.5.100"
+  dashboard_port: 29999
+  move_port: 30003
+  feedback_port: 30004

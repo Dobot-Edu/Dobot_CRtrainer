@@ -1,0 +1,38 @@
+# Dobot_CRtrainer 完整 Python 依赖
+#
+# 目标平台：
+#   - Ubuntu Linux、Python 3.12
+#   - NVIDIA RTX 4090
+#   - 使用 CUDA 进行训练和推理
+#   - Logitech 顶部相机和 Intel RealSense D435 腕部相机
+#
+# 推荐安装命令：
+#   conda activate dobot-lerobot
+#   python -m pip install --timeout 3600 -r requirements.txt
+#
+# 这是完整训练/推理环境的依赖文件。除非确实需要在 dobot-vr-teleop
+# 中使用 PyTorch 和 LeRobot，否则不要在该轻量遥操作环境中安装本文件。
+
+# 当前工作站已经验证通过的 PyTorch GPU 版本。
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.7.1+cu118
+torchvision==0.22.1+cu118
+
+# 项目通用的数值计算、YAML 配置和 HTTP 依赖。
+# 数据采集和推理需要弹出相机画面，因此必须使用带 GUI 的 OpenCV。
+numpy==2.2.6
+PyYAML==6.0.3
+requests==2.34.2
+opencv-python==4.13.0.92
+
+# Intel RealSense D435 腕部相机。
+pyrealsense2==2.58.2.10647
+
+# 以可编辑模式安装本项目内的 LeRobot 源码。
+# training：安装 datasets、PyArrow/Pandas、视频解码、Accelerate 和 W&B。
+# pi：安装 Pi0 和 Pi0.5 所需的 Transformers 与 SciPy。
+# ACT 已包含在 LeRobot 核心包中，不需要额外的依赖组。
+-e ./lerobot-main[training,pi]
+
+# PaliGemma/Pi tokenizer 支持，Pi0 和 Pi0.5 会直接使用。
+sentencepiece==0.2.2

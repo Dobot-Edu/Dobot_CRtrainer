@@ -1,0 +1,83 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# IDE and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Model/download caches
+.cache/
+**/.cache/
+huggingface/
+wandb/
+
+# Collected and converted datasets are local runtime artifacts
+/datasets/**
+!/datasets/.gitkeep
+
+# Checkpoints, optimizer states, logs and inference videos
+/outputs/**
+!/outputs/.gitkeep
+**/checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.engine
+*.safetensors
+
+# Keep the tiny upstream LeRobot test fixtures
+!/lerobot-main/tests/artifacts/**/*.safetensors
+
+# Generated archives and temporary recordings
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.mp4
+*.avi
+*.mkv
+*.log
+*.tmp
+
+# Unity generated output and machine-local editor state. Keep the verified
+# Quest installation package while ignoring any other generated build files.
+/quest_unity_app/[Bb]uilds/*
+!/quest_unity_app/Builds/DobotVrTeleop.apk
+/quest_unity_app/[Ll]ibrary/
+/quest_unity_app/[Tt]emp/
+/quest_unity_app/[Oo]bj/
+/quest_unity_app/[Ll]ogs/
+/quest_unity_app/UserSettings/
+*.apk
+!/quest_unity_app/Builds/DobotVrTeleop.apk
+
+# Editable-install metadata
+*.egg-info/
+
+# Local rollback snapshots
+/backups/
+lerobot-main/tests/artifacts/image_transforms/single_transforms.safetensors
+lerobot-main/tests/artifacts/

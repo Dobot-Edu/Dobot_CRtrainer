@@ -1,0 +1,23 @@
+robot:
+  name: "dobot_cr5a"
+  control_mode: "servo_p"
+  servo_period_s: 0.02
+  # Match each ServoP segment to the 50 Hz host command period.
+  servo_t_s: 0.02
+  # Responsive but still below the aggressive end of Dobot's documented range.
+  servo_aheadtime: 35
+  servo_gain: 450
+  speed_factor_percent: 100
+  # Stable baseline: direct ServoP without joint-level J6 locking.
+  lock_j6: false
+  # Allow VR wrist rotation so J4/J5/J6 can participate in the IK solution.
+  lock_orientation: false
+  # Recorded from the robot status at the confirmed initial position.
+  default_pose_mm_deg: [141.000, -473.000, 469.000, 180.000, 0.000, -90.000]
+
+calibration:
+  required: true
+  button: "button_a"
+  robot_initial_pose_mm_deg: [141.000, -473.000, 469.000, 180.000, 0.000, -90.000]
+  position_tolerance_mm: 10.0
+  orientation_tolerance_deg: 8.0

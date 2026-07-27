@@ -1,0 +1,12 @@
+# Network settings for the Windows control computer and Quest 3.
+host_network:
+  # Optional manual fallback only. Automatic discovery does not need this IP.
+  local_ip: "192.168.89.66"
+
+  # Keep 0.0.0.0 to receive packets on all computer network adapters.
+  listen_ip: "0.0.0.0"
+  listen_port: 5005
+
+  # Quest broadcasts discovery requests on this port.
+  discovery_enabled: true
+  discovery_port: 5006
