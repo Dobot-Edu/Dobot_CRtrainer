@@ -81,3 +81,9 @@ wandb/
 /backups/
 lerobot-main/tests/artifacts/image_transforms/single_transforms.safetensors
 lerobot-main/tests/artifacts/
+
+# Local Git LFS hooks generated outside .git
+/hooks/
+
+# Upstream test artifacts contain LFS pointers without bundled objects
+/lerobot-main/tests/artifacts/**
