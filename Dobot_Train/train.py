@@ -76,27 +76,33 @@ PUSH_TO_HUB = False
 # 缓存，不再因网络断开而在模型或 tokenizer 初始化阶段失败。
 HUGGINGFACE_OFFLINE = True
 
-# Fields here override the selected strategy preset below. Use this for
-# strategy-specific fields such as pretrained_path, model_name, horizon, etc.
-POLICY_OVERRIDES: dict[str, Any] = {
-    # 从官方 Pi0.5 基础模型开始微调。
-    "pretrained_path": "lerobot/pi05_base",
-    # RTX 4090 支持 BF16，可显著降低显存占用。
-    "dtype": "bfloat16",
-    # 用额外计算换取更低的训练显存。
-    "gradient_checkpointing": True,
-    # 第一次训练先关闭，便于排查加载和训练问题。
-    "compile_model": False,
-    # 冻结视觉语言模型，只训练动作专家和投影层。
-    "train_expert_only": True,
-    # train_expert_only 已经会冻结整个 VLM。
-    "freeze_vision_encoder": False,
-    # 每次预测未来30帧动作，30 FPS下约等于1秒。
-    "chunk_size": 30,
-    # 推理时执行10帧后重新观察相机并重新预测。
-    "n_action_steps": 10,
-    # 当前数据是绝对TCP位姿，第一轮不要切换为相对动作。
-    "use_relative_actions": False,
+# 所有策略共用的最终覆盖项。这里只能填写每一种可选策略都支持的字段；
+# 通常保持为空，避免切换模型时把某个模型的专用参数传给另一个模型。
+POLICY_OVERRIDES: dict[str, Any] = {}
+
+# 各策略独立的覆盖项。脚本只会读取当前 SELECTED_POLICY 对应的配置，
+# 因此切换 ACT、Pi0、Pi0.5 等策略时不会发生参数串用。
+POLICY_OVERRIDES_BY_TYPE: dict[str, dict[str, Any]] = {
+    "pi05": {
+        # 从官方 Pi0.5 基础模型开始微调。
+        "pretrained_path": "lerobot/pi05_base",
+        # RTX 4090 支持 BF16，可显著降低显存占用。
+        "dtype": "bfloat16",
+        # 用额外计算换取更低的训练显存。
+        "gradient_checkpointing": True,
+        # 第一次训练先关闭，便于排查加载和训练问题。
+        "compile_model": False,
+        # 冻结视觉语言模型，只训练动作专家和投影层。
+        "train_expert_only": True,
+        # train_expert_only 已经会冻结整个 VLM。
+        "freeze_vision_encoder": False,
+        # 每次预测未来 30 帧动作，30 FPS 下约等于 1 秒。
+        "chunk_size": 30,
+        # 推理时执行 10 帧后重新观察相机并重新预测。
+        "n_action_steps": 10,
+        # 当前数据是绝对 TCP 位姿，第一轮不要切换为相对动作。
+        "use_relative_actions": False,
+    },
 }
 
 # Set either value to a complete LeRobot optimizer/scheduler table to replace
@@ -250,6 +256,7 @@ def build_inline_config(policy_type: str | None = None) -> dict[str, Any]:
         "push_to_hub": PUSH_TO_HUB,
     }
     policy = deep_merge(policy, POLICY_PRESETS[selected].get("policy", {}))
+    policy = deep_merge(policy, POLICY_OVERRIDES_BY_TYPE.get(selected, {}))
     policy = deep_merge(policy, POLICY_OVERRIDES)
 
     dataset = {

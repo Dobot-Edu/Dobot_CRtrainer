@@ -42,8 +42,6 @@ Dobot_CRtrainer/
 └── requirements.txt
 ```
 
-数据集、模型权重、推理视频和缓存默认不包含在 GitHub 精简版本中。
-
 ## 环境要求
 
 - Ubuntu 22.04 或兼容 Linux 系统
