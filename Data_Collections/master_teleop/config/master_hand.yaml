@@ -1,0 +1,113 @@
+# Configuration used only by Data_Collections/master_teleop.
+master_hand:
+  enabled: true
+  # Stable USB identity of the single master hand currently connected.
+  device: "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5A35010867-if00"
+  baud_rate: 2000000
+  # The original Xtrainer port scanner tries 2 Mbps first, then 1 Mbps.
+  baud_rate_candidates: [2000000, 1000000]
+  protocol_version: 2.0
+  side: "auto"
+  read_hz: 100
+  # Allow short USB scheduling stalls without interrupting an active episode.
+  watchdog_timeout_s: 0.35
+
+  # Overrides used only by master-hand teleoperation. VR and inference continue
+  # to use config/safety.yaml unchanged.
+  safety:
+    watchdog_timeout_s: 0.35
+    workspace:
+      # Master-hand commissioning box. This includes both the Cartesian home
+      # near [141, -473, 469] mm and the tested positive-Y alignment target.
+      # Controller collision detection and six-joint limits remain active.
+      x_min_mm: -500.0
+      x_max_mm: 1400.0
+      y_min_mm: -750.0
+      y_max_mm: 600.0
+      z_min_mm: 200.0
+      z_max_mm: 750.0
+
+  # Xtrainer uses a custom position table whose present-position value is at
+  # address 140. Keep this configurable until the attached hand is probed.
+  present_position_address: 140
+  present_position_length: 4
+  position_units_per_pi: 2048.0
+  buttons_active_low: true
+  torque_enable_address: 64
+  goal_position_address: 116
+  # Match dobot_xtrainer set_torque_mode(): only toggle torque. ID 17 can
+  # report a valid present position that its Goal Position limit rejects.
+  sync_goal_before_lock: false
+
+  buttons:
+    short_press_max_s: 0.5
+    long_press_min_s: 1.0
+    # Match Xtrainer: the leader is rigid when the button/control script starts.
+    initial_locked: true
+
+  profiles:
+    left:
+      joint_ids: [1, 2, 4, 5, 6, 7]
+      button_board_id: 3
+      gripper_id: 8
+      joint_offsets_rad: [6.99, 0.92, 3.16, 2.17, 3.85, 3.01]
+      joint_signs: [1, 1, -1, -1, -1, 1]
+      start_joints_rad: [-1.57, 0.0, -1.57, 0.0, 1.57, 1.57]
+      gripper_closed_deg: 204.0
+      gripper_open_deg: 174.0
+    right:
+      joint_ids: [11, 12, 14, 15, 16, 17]
+      button_board_id: 13
+      gripper_id: 18
+      joint_offsets_rad: [2.38, 3.82, 3.27, 2.37, 2.30, 1.60]
+      joint_signs: [1, 1, -1, -1, -1, 1]
+      start_joints_rad: [1.57, 0.0, 1.57, 0.0, -1.57, -1.57]
+      gripper_closed_deg: 203.0
+      gripper_open_deg: 173.0
+
+  mapping:
+    # Match dobot_xtrainer: the calibrated leader joint angles are the CR5A
+    # targets. A long press starts a rate-limited approach before following.
+    mode: "absolute"
+    joint_signs: [1, 1, 1, 1, 1, 1]
+    joint_scales: [1, 1, 1, 1, 1, 1]
+    # Responsive 50 Hz following with reduced overshoot and vibration.
+    max_step_deg: 3.5
+    max_speed_deg_s: 180.0
+    # X-trainer dynamic_approach uses 0.01 rad steps with a 50 ms interval,
+    # equivalent to about 11.46 deg/s. Long A runs this approach while locked.
+    soft_alignment_max_step_deg: 0.60
+    soft_alignment_max_speed_deg_s: 11.5
+    soft_alignment_tolerance_deg: 1.0
+    # Retained for configuration compatibility; X-trainer starts immediately.
+    pre_alignment_master_settle_s: 0.0
+    # Permit more lead over delayed CR5A feedback while retaining a hard bound.
+    max_command_lead_deg: 14.0
+    # Keep the per-command PositiveKin experiment disabled for master-hand
+    # alignment. Current TCP workspace, collision, alarm, joint-limit and
+    # initial-delta checks remain active; enabling this can block ServoJ on
+    # controllers whose PositiveKin response is delayed or incompatible.
+    predict_target_workspace: false
+    # Master-only ServoJ response tuning; VR and inference keep robot.yaml values.
+    servo_aheadtime: 20
+    servo_gain: 680
+    # Conservative operational limits for initial single-CR5A commissioning.
+    joint_min_deg: [-180, -120, -150, -180, -180, -180]
+    joint_max_deg: [180, 120, 150, 180, 180, 180]
+    require_hold_button_a: false
+    alignment_tolerance_deg: 1.0
+    # Permit any initial leader/follower delta when the frozen target remains
+    # inside the configured TCP workspace and joint limits.
+    enforce_initial_alignment_delta: false
+    # Optional commissioning guard used only when the flag above is true.
+    max_initial_alignment_delta_deg: 34.0
+
+  # Single-right-arm form of dobot_xtrainer.robot_pose_init(). The first
+  # waypoint raises the arm; the second returns to the calibrated home pose.
+  robot_pose_init:
+    raised_joint_deg: [90, -30, 110, -20, -90, -90]
+    home_joint_deg: [90, 0, 90, 0, -90, -90]
+    interpolation_step_rad: 0.01
+    max_interpolation_steps: 100
+    final_tolerance_deg: 1.5
+    settle_timeout_s: 3.0

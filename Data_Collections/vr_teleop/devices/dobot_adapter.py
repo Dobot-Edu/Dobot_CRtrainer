@@ -32,6 +32,19 @@ class BaseRobotAdapter:
     def servo_p(self, pose_mm_deg: Pose6, t: float, aheadtime: float, gain: float) -> None:
         raise NotImplementedError
 
+    def servo_j(
+        self,
+        joints_deg: list[float],
+        t: float,
+        aheadtime: float,
+        gain: float,
+    ) -> None:
+        raise NotImplementedError
+
+    def positive_kinematics(self, joints_deg: list[float]) -> Pose6:
+        """Return the controller-model TCP pose for a six-joint target."""
+        raise NotImplementedError
+
     def set_speed_factor(self, percent: int) -> None:
         raise NotImplementedError
 
@@ -43,10 +56,31 @@ class BaseRobotAdapter:
     ) -> None:
         raise NotImplementedError
 
+    def move_j_joint(
+        self,
+        joints_deg: list[float],
+        acceleration: int = 10,
+        velocity: int = 10,
+    ) -> None:
+        raise NotImplementedError
+
 
 class MockRobotAdapter(BaseRobotAdapter):
-    def __init__(self, initial_pose: Pose6) -> None:
-        self._state = RobotState(connected=False, enabled=True, pose_mm_deg=list(initial_pose))
+    def __init__(
+        self,
+        initial_pose: Pose6,
+        initial_joints_deg: list[float] | None = None,
+    ) -> None:
+        joints = initial_joints_deg or [90.0, 0.0, 90.0, 0.0, -90.0, -90.0]
+        self._state = RobotState(
+            connected=False,
+            enabled=True,
+            pose_mm_deg=list(initial_pose),
+            target_pose_mm_deg=list(initial_pose),
+            q_actual_deg=list(joints),
+            q_target_deg=list(joints),
+            robot_mode=5,
+        )
         self.commands_sent = 0
 
     def connect(self) -> None:
@@ -69,6 +103,27 @@ class MockRobotAdapter(BaseRobotAdapter):
         self._state.last_feedback_monotonic = monotonic()
         self._state.message = f"mock_servo_p:{self.commands_sent}"
 
+    def servo_j(
+        self,
+        joints_deg: list[float],
+        t: float,
+        aheadtime: float,
+        gain: float,
+    ) -> None:
+        if len(joints_deg) != 6:
+            raise RobotAdapterError("ServoJ requires six joint values")
+        self.commands_sent += 1
+        self._state.q_target_deg = [float(value) for value in joints_deg]
+        self._state.q_actual_deg = list(self._state.q_target_deg)
+        self._state.last_feedback_monotonic = monotonic()
+        self._state.message = f"mock_servo_j:{self.commands_sent}"
+
+    def positive_kinematics(self, joints_deg: list[float]) -> Pose6:
+        if len(joints_deg) != 6:
+            raise RobotAdapterError("PositiveKin requires six joint values")
+        pose = self._state.target_pose_mm_deg or self._state.pose_mm_deg
+        return [float(value) for value in pose]
+
     def set_speed_factor(self, percent: int) -> None:
         self._state.speed_scaling = float(percent)
         self._state.message = f"mock_speed_factor:{percent}"
@@ -84,6 +139,19 @@ class MockRobotAdapter(BaseRobotAdapter):
         self._state.message = (
             f"mock_move_j:a={acceleration},v={velocity}"
         )
+
+    def move_j_joint(
+        self,
+        joints_deg: list[float],
+        acceleration: int = 10,
+        velocity: int = 10,
+    ) -> None:
+        if len(joints_deg) != 6:
+            raise RobotAdapterError("MovJ joint target requires six values")
+        self._state.q_target_deg = [float(value) for value in joints_deg]
+        self._state.q_actual_deg = list(self._state.q_target_deg)
+        self._state.last_feedback_monotonic = monotonic()
+        self._state.message = f"mock_move_j_joint:a={acceleration},v={velocity}"
 
 
 def _load_dobot_api() -> Any:
@@ -112,11 +180,17 @@ class DobotTcpAdapter(BaseRobotAdapter):
         move_port: int,
         feedback_port: int,
         lock_j6: bool = False,
+        user_index: int = 0,
+        tool_index: int = 0,
     ) -> None:
         self.robot_ip = robot_ip
         self.dashboard_port = dashboard_port
         self.move_port = move_port
         self.feedback_port = feedback_port
+        self.user_index = int(user_index)
+        self.tool_index = int(tool_index)
+        if not 0 <= self.user_index <= 9 or not 0 <= self.tool_index <= 9:
+            raise ValueError("Dobot user_index and tool_index must be in [0, 9]")
         self.dashboard: Any = None
         self.move: Any = None
         self.feedback: Any = None
@@ -140,6 +214,7 @@ class DobotTcpAdapter(BaseRobotAdapter):
         if hasattr(api, "DobotApiFeedBack"):
             self.feedback = api.DobotApiFeedBack(self.robot_ip, self.feedback_port)
         self._state.connected = True
+        self._select_coordinate_frames()
         self._refresh_pose_best_effort()
         if self.lock_j6:
             self._refresh_joints_best_effort()
@@ -157,6 +232,35 @@ class DobotTcpAdapter(BaseRobotAdapter):
                 daemon=True,
             )
             self._feedback_thread.start()
+
+    def _select_coordinate_frames(self) -> None:
+        """Use the coordinate frames assumed by workspace and calibration data."""
+        if self.dashboard is None:
+            return
+        # User 0 and Tool 0 are the controller defaults. Some CR controller
+        # firmware rejects explicitly selecting these defaults with error -1,
+        # especially before EnableRobot, even though ServoP already uses them.
+        if self.user_index == 0 and self.tool_index == 0:
+            print(
+                "Dobot coordinate frames: using controller defaults "
+                "(User=0 Tool=0)",
+                flush=True,
+            )
+            return
+        for method_name, index in (
+            ("User", self.user_index),
+            ("Tool", self.tool_index),
+        ):
+            method = getattr(self.dashboard, method_name, None)
+            if not callable(method):
+                raise RobotAdapterError(
+                    f"{method_name} coordinate selection is unavailable in Dobot API"
+                )
+            _require_success(method(index), f"{method_name}({index})")
+        print(
+            f"Dobot coordinate frames set: User={self.user_index} Tool={self.tool_index}",
+            flush=True,
+        )
 
     def close(self) -> None:
         self._feedback_stop.set()
@@ -211,6 +315,62 @@ class DobotTcpAdapter(BaseRobotAdapter):
             gain=gain,
         )
         _require_success(response, "ServoP")
+
+    def servo_j(
+        self,
+        joints_deg: list[float],
+        t: float,
+        aheadtime: float,
+        gain: float,
+    ) -> None:
+        if self.move is None:
+            raise RobotAdapterError("Robot is not connected")
+        if len(joints_deg) != 6:
+            raise RobotAdapterError("ServoJ requires six joint values")
+        method = getattr(self.move, "ServoJ", None)
+        if not callable(method):
+            raise RobotAdapterError("ServoJ is not available in the selected Dobot API class")
+        response = method(
+            joints_deg[0],
+            joints_deg[1],
+            joints_deg[2],
+            joints_deg[3],
+            joints_deg[4],
+            joints_deg[5],
+            t=t,
+            aheadtime=aheadtime,
+            gain=gain,
+        )
+        _require_success(response, "ServoJ")
+
+    def positive_kinematics(self, joints_deg: list[float]) -> Pose6:
+        """Query Dobot's own CR model before sending a joint-space command."""
+        if self.dashboard is None:
+            raise RobotAdapterError("Robot is not connected")
+        if len(joints_deg) != 6:
+            raise RobotAdapterError("PositiveKin requires six joint values")
+        method = getattr(self.dashboard, "PositiveKin", None)
+        if not callable(method):
+            raise RobotAdapterError("PositiveKin is unavailable in the Dobot API")
+        frame_options: dict[str, int] = {}
+        if self.user_index != 0:
+            frame_options["user"] = self.user_index
+        if self.tool_index != 0:
+            frame_options["tool"] = self.tool_index
+        response = method(
+            joints_deg[0],
+            joints_deg[1],
+            joints_deg[2],
+            joints_deg[3],
+            joints_deg[4],
+            joints_deg[5],
+            **frame_options,
+        )
+        _require_success(response, "PositiveKin")
+        pose = _parse_pose_response(response)
+        if pose is None or len(pose) != 6:
+            raise RobotAdapterError(f"PositiveKin returned an invalid pose: {response!r}")
+        return pose
 
     def _servo_j_with_locked_j6(
         self,
@@ -281,6 +441,32 @@ class DobotTcpAdapter(BaseRobotAdapter):
             v=velocity,
         )
         _require_success(response, "MovJ")
+
+    def move_j_joint(
+        self,
+        joints_deg: list[float],
+        acceleration: int = 10,
+        velocity: int = 10,
+    ) -> None:
+        if self.dashboard is None:
+            raise RobotAdapterError("Robot is not connected")
+        if len(joints_deg) != 6:
+            raise RobotAdapterError("MovJ joint target requires six values")
+        method = getattr(self.dashboard, "MovJ", None)
+        if not callable(method):
+            raise RobotAdapterError("MovJ is not available in the selected Dobot API")
+        response = method(
+            joints_deg[0],
+            joints_deg[1],
+            joints_deg[2],
+            joints_deg[3],
+            joints_deg[4],
+            joints_deg[5],
+            1,
+            a=acceleration,
+            v=velocity,
+        )
+        _require_success(response, "MovJ(joint)")
 
     def clear_error(self) -> None:
         if self.dashboard is not None and hasattr(self.dashboard, "ClearError"):
@@ -461,6 +647,14 @@ def _copy_feedback_fields(data: Any, state: RobotState) -> None:
     q_actual = _field(data, "QActual")
     if q_actual is not None and len(q_actual) >= 6:
         state.q_actual_deg = [float(v) for v in q_actual[:6]]
+
+    q_target = _field(data, "QTarget")
+    if q_target is not None and len(q_target) >= 6:
+        state.q_target_deg = [float(v) for v in q_target[:6]]
+
+    target_pose = _field(data, "ToolVectorTarget")
+    if target_pose is not None and len(target_pose) >= 6:
+        state.target_pose_mm_deg = [float(v) for v in target_pose[:6]]
 
     q_actual_velocity = _field(data, "QDActual")
     if q_actual_velocity is not None and len(q_actual_velocity) >= 6:

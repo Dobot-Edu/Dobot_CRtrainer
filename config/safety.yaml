@@ -3,14 +3,28 @@ safety:
   deadman_grip_threshold: 0.65
   watchdog_timeout_s: 0.25
   # Responsive teleoperation limits. Validate with the arm unloaded first.
-  max_linear_speed_mm_s: 350.0
-  max_angular_speed_deg_s: 70.0
+
+  # # The streamed target may lead delayed feedback by only a few 30 Hz cycles.
+  # # This avoids slow feedback-locked following without allowing target runaway.
+  # config/safety.yaml
+  # max_linear_speed_mm_s: 180.0
+  # max_angular_speed_deg_s: 90.0
+
+  # max_step_mm: 6.0
+  # max_step_deg: 3.0
+
+  # max_command_lead_mm: 48.0
+  # max_command_lead_deg: 12.0
+
+  max_linear_speed_mm_s: 210.0
+  max_angular_speed_deg_s: 105.0
+
   max_step_mm: 7.0
-  max_step_deg: 2.0
-  # The streamed target may lead delayed feedback by only a few 50 Hz cycles.
-  # This avoids slow feedback-locked following without allowing target runaway.
-  max_command_lead_mm: 21.0
-  max_command_lead_deg: 6.0
+  max_step_deg: 3.5
+
+  max_command_lead_mm: 48.0
+  max_command_lead_deg: 12.0
+
   stop_on_feedback_timeout: true
   feedback_timeout_s: 0.50
   stop_on_collision_state: true
@@ -20,7 +34,8 @@ safety:
     # Expanded teleoperation box around the current initial pose.
     # Confirm reachability, floor clearance, self-collision and cable limits on site.
     x_min_mm: -650.0
-    x_max_mm: 650.0
+    # The confirmed standard joint pose reports x=908.14 mm in User 0 / Tool 0.
+    x_max_mm: 920.0
     y_min_mm: -800.0
     y_max_mm: 500.0
     z_min_mm: 150.0

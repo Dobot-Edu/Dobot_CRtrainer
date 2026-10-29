@@ -27,6 +27,7 @@ from convert_to_lerobot import (  # noqa: E402
     DEFAULT_MIN_EXECUTED_RATIO,
     DEFAULT_MIN_FEEDBACK_COVERAGE,
     DEFAULT_MIN_SAFETY_CLEAN_RATIO,
+    TASK_NAME,
     alignment_violations,
     build_alignment_quality,
     validate_and_prepare_segments,
@@ -42,10 +43,10 @@ from convert_to_lerobot import (  # noqa: E402
 # =============================================================================
 
 # 原始采集任务目录，其中应包含 episodes/episode_xxx/frames.jsonl。
-RAW_TASK_DIR = "datasets/test123"
+RAW_TASK_DIR = f"datasets/{TASK_NAME}"
 
 # convert_to_lerobot.py 生成的 LeRobot 数据集目录。
-LEROBOT_DIR = "datasets/test123/test123_lerobot"
+LEROBOT_DIR = f"datasets/{TASK_NAME}/{TASK_NAME}_lerobot"
 
 # True 表示发现任何训练数据质量警告时以状态码 1 退出。
 # 这样可以防止有问题的数据继续进入训练；命令行可用 --no-strict 临时关闭。

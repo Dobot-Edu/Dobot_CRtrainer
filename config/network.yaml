@@ -3,7 +3,10 @@ vr:
   listen_port: 5005
 
 robot_network:
-  ip: "192.168.5.100"
+  # CR5A controller address detected on the direct Ethernet link.
+  # The host Ethernet adapter uses 192.168.5.100/24.
+  ip: "192.168.5.1"
   dashboard_port: 29999
-  move_port: 30003
+  # Current CRA V4 API sends motion commands through the dashboard socket.
+  move_port: 29999
   feedback_port: 30004

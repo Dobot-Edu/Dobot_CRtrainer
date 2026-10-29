@@ -44,3 +44,11 @@ gripper:
   socket_timeout_s: 3.0
   write_retries: 3
   retry_delay_s: 0.50
+
+  # No dwell between endpoints. Endpoint feedback decides when to reverse.
+  test_cycle_hold_s: 0.00
+  # Minimum travel time before a stable non-nominal endpoint is accepted.
+  test_cycle_travel_s: 0.45
+  test_cycle_command_timeout_s: 5.0
+  # A full-close/open signal is complete only after feedback reaches its target.
+  test_cycle_position_tolerance: 30

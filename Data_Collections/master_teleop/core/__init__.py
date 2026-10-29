@@ -1,0 +1,1 @@
+"""Single-master application runtime."""

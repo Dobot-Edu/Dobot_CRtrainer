@@ -42,6 +42,10 @@ class GripperConfig:
     socket_timeout_s: float = 3.0
     write_retries: int = 3
     retry_delay_s: float = 0.50
+    test_cycle_hold_s: float = 0.30
+    test_cycle_travel_s: float = 1.20
+    test_cycle_command_timeout_s: float = 3.0
+    test_cycle_position_tolerance: int = 30
 
     @staticmethod
     def from_mapping(values: dict[str, Any] | None) -> "GripperConfig":
@@ -75,6 +79,14 @@ class GripperConfig:
             socket_timeout_s=float(data.get("socket_timeout_s", 3.0)),
             write_retries=int(data.get("write_retries", 3)),
             retry_delay_s=float(data.get("retry_delay_s", 0.50)),
+            test_cycle_hold_s=float(data.get("test_cycle_hold_s", 0.30)),
+            test_cycle_travel_s=float(data.get("test_cycle_travel_s", 1.20)),
+            test_cycle_command_timeout_s=float(
+                data.get("test_cycle_command_timeout_s", 3.0)
+            ),
+            test_cycle_position_tolerance=int(
+                data.get("test_cycle_position_tolerance", 30)
+            ),
         )
         config.validate()
         return config
@@ -111,12 +123,17 @@ class GripperConfig:
             or self.command_interval_s < 0.0
             or self.feedback_poll_interval_s <= 0.0
             or self.retry_delay_s < 0.0
+            or self.test_cycle_hold_s < 0.0
+            or self.test_cycle_travel_s <= 0.0
+            or self.test_cycle_command_timeout_s <= 0.0
         ):
             raise ValueError("gripper timing values are invalid")
         if self.socket_timeout_s <= 0.0:
             raise ValueError("gripper.socket_timeout_s must be positive")
         if self.write_retries < 1:
             raise ValueError("gripper.write_retries must be at least 1")
+        if not 0 <= self.test_cycle_position_tolerance <= 200:
+            raise ValueError("gripper.test_cycle_position_tolerance must be in [0, 200]")
 
 
 class TriggerGripperController:
@@ -213,7 +230,12 @@ class TriggerGripperController:
             f"force={self.config.force}, speed={self.config.speed}"
         )
 
-    def update(self, trigger_value: float, input_valid: bool = True) -> None:
+    def update(
+        self,
+        trigger_value: float,
+        input_valid: bool = True,
+        allow_initial_open: bool = False,
+    ) -> None:
         if not self.config.enabled:
             return
         self._raise_worker_error()
@@ -232,6 +254,7 @@ class TriggerGripperController:
                 not desired
                 and self.config.require_initial_press_before_open
                 and not self._initial_press_seen
+                and not allow_initial_open
             ):
                 return
         if desired is None:

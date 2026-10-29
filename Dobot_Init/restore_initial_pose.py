@@ -45,19 +45,30 @@ def format_pose(label: str, pose: list[float]) -> str:
     return f"{label}=[{values}]"
 
 
+def max_joint_error(actual: list[float], target: list[float]) -> float:
+    if len(actual) < 6 or len(target) != 6:
+        raise ValueError("Joint restore requires six actual and target joint values")
+    return max(abs(actual[index] - target[index]) for index in range(6))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="将 Dobot 以正常速度 MovJ 恢复到 config/robot.yaml 中的初始 TCP 位姿。"
+        description="将 Dobot 通过关节模式 MovJ 恢复到 config/robot.yaml 中的绝对初始关节姿态。"
     )
     parser.add_argument("--config-dir", default=str(ROOT / "config"))
-    parser.add_argument("--robot-ip", default="192.168.5.100")
+    parser.add_argument(
+        "--robot-ip",
+        default=None,
+        help="Override config/network.yaml robot_network.ip.",
+    )
     parser.add_argument("--acceleration", type=int, default=100, choices=range(1, 101))
     parser.add_argument("--velocity", type=int, default=100, choices=range(1, 101))
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--joint-tolerance", type=float, default=1.0)
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="只读取并显示当前位姿和目标位姿，不发送 MovJ。",
+        help="只读取并显示当前/目标关节和 TCP 位姿，不发送 MovJ。",
     )
     parser.add_argument(
         "--no-gripper",
@@ -72,13 +83,26 @@ def main() -> int:
     execute = not args.dry_run
 
     config = load_project_config(args.config_dir)
-    target = [float(value) for value in config["calibration"]["robot_initial_pose_mm_deg"]]
+    calibration = config["calibration"]
+    target_joints = [
+        float(value) for value in calibration["robot_initial_joints_deg"]
+    ]
+    target_pose = [
+        float(value) for value in calibration["robot_initial_pose_mm_deg"]
+    ]
+    if len(target_joints) != 6 or len(target_pose) != 6:
+        raise ValueError("Initial joint and TCP targets must each contain six values")
+    if args.joint_tolerance <= 0.0:
+        parser.error("--joint-tolerance must be positive")
     network = config["robot_network"]
+    robot_config = config["robot"]
     robot = DobotTcpAdapter(
         args.robot_ip or network["ip"],
         int(network["dashboard_port"]),
         int(network["move_port"]),
         int(network["feedback_port"]),
+        user_index=int(robot_config.get("user_index", 0)),
+        tool_index=int(robot_config.get("tool_index", 0)),
     )
     gripper = None
     gripper_values = config.get("gripper", {})
@@ -97,17 +121,23 @@ def main() -> int:
         robot.connect()
         time.sleep(0.4)
         state = robot.state()
+        if len(state.q_actual_deg) < 6:
+            raise RobotAdapterError("Robot feedback does not contain six joint values")
         print(format_pose("current_pose_mm_deg", state.pose_mm_deg))
-        print(format_pose("target_pose_mm_deg", target))
-        position_error, orientation_error = max_pose_error(state.pose_mm_deg, target)
+        print(format_pose("target_pose_mm_deg", target_pose))
+        print(format_pose("current_joints_deg", state.q_actual_deg[:6]))
+        print(format_pose("target_joints_deg", target_joints))
+        position_error, orientation_error = max_pose_error(state.pose_mm_deg, target_pose)
+        joint_error = max_joint_error(state.q_actual_deg, target_joints)
         print(
             "current_error: "
+            f"joint={joint_error:.3f} deg, "
             f"position={position_error:.3f} mm, "
             f"orientation={orientation_error:.3f} deg"
         )
 
-        if position_error <= 1.5 and orientation_error <= 2.0:
-            print("Robot is already at the initial pose; skipping gripper initialization and MovJ.")
+        if joint_error <= args.joint_tolerance:
+            print("Robot is already at the absolute initial joint configuration; skipping MovJ.")
             return 0
 
         if not execute:
@@ -133,28 +163,36 @@ def main() -> int:
             )
 
         print(
-            f"Sending MovJ at acceleration={args.acceleration}% "
+            f"Sending MovJ(joint) at acceleration={args.acceleration}% "
             f"velocity={args.velocity}%. Keep the emergency stop reachable."
         )
         if gripper is not None:
             print("Initializing configured gripper before restoring initial pose.")
             gripper.connect(robot.dashboard)
-        robot.move_j_pose(target, args.acceleration, args.velocity)
+        robot.move_j_joint(target_joints, args.acceleration, args.velocity)
         moving = True
 
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
             time.sleep(0.2)
             state = robot.state()
-            position_error, orientation_error = max_pose_error(state.pose_mm_deg, target)
+            if len(state.q_actual_deg) < 6:
+                raise RobotAdapterError("Robot feedback lost six-joint state during restore")
+            joint_error = max_joint_error(state.q_actual_deg, target_joints)
+            position_error, orientation_error = max_pose_error(
+                state.pose_mm_deg, target_pose
+            )
             print(
                 f"moving mode={state.robot_mode} "
+                f"joint_error={joint_error:.2f}deg "
                 f"position_error={position_error:.2f}mm "
                 f"orientation_error={orientation_error:.2f}deg"
             )
-            if position_error <= 1.5 and orientation_error <= 2.0:
+            if joint_error <= args.joint_tolerance:
                 moving = False
-                print("Initial pose restored.")
+                print(format_pose("restored_joints_deg", state.q_actual_deg[:6]))
+                print(format_pose("restored_pose_mm_deg", state.pose_mm_deg))
+                print("Absolute initial joint configuration restored.")
                 return 0
             if state.error_status or state.collision_state:
                 raise RobotAdapterError(

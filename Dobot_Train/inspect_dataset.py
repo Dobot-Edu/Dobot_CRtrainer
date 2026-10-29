@@ -8,26 +8,48 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "Data_Collections"))
 
-from vr_teleop.core.config import load_project_config
-from vr_teleop.collection.vr_teleop import DEFAULT_DATASET_DIR
+from master_teleop.collection.launch_nodes import DATASET_TASK_NAME
+
+# =============================================================================
+# 用户配置：修改后直接运行 `python Dobot_Train/inspect_dataset.py`。
+# =============================================================================
+
+# 待检查的原始采集数据集目录。相对路径以项目根目录为基准。
+# 目录内应包含 episodes/episode_<时间戳>/metadata.json 和 data.npz。
+RAW_DATASET_PATH = f"datasets/{DATASET_TASK_NAME}"
+
+# True：同时读取每个 episode 的 data.npz 并检查帧数和 action 形状。
+# False：只汇总 metadata.json，检查速度更快。
+VALIDATE_NPZ_BY_DEFAULT = True
 
 
 def main() -> None:
-    config = load_project_config(ROOT / "config")
-    collection = config.get("data_collection", {})
-
     parser = argparse.ArgumentParser(description="Inspect Dobot_CRtrainer episodes.")
-    parser.add_argument("--dataset-dir", default=None)
-    parser.add_argument("--task", default=None)
-    parser.add_argument("--validate-npz", action="store_true")
+    parser.add_argument(
+        "--dataset-path",
+        default=None,
+        help="Temporarily override RAW_DATASET_PATH for this run.",
+    )
+    validation = parser.add_mutually_exclusive_group()
+    validation.add_argument(
+        "--validate-npz",
+        dest="validate_npz",
+        action="store_true",
+        help="Validate every episode data.npz file.",
+    )
+    validation.add_argument(
+        "--no-validate-npz",
+        dest="validate_npz",
+        action="store_false",
+        help="Only summarize episode metadata.json files.",
+    )
+    parser.set_defaults(validate_npz=VALIDATE_NPZ_BY_DEFAULT)
     args = parser.parse_args()
 
-    dataset_dir = Path(args.dataset_dir) if args.dataset_dir is not None else Path(DEFAULT_DATASET_DIR)
-    if not dataset_dir.is_absolute():
-        dataset_dir = ROOT / dataset_dir
-    base = dataset_dir
-    if args.task:
-        base = base / args.task
+    base = Path(args.dataset_path or RAW_DATASET_PATH).expanduser()
+    if not base.is_absolute():
+        base = ROOT / base
+    base = base.resolve()
 
     metadata_files = sorted(base.glob("**/metadata.json")) if base.exists() else []
     if not metadata_files:

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -10,6 +14,75 @@ import numpy as np
 
 class CameraError(RuntimeError):
     pass
+
+
+def configure_preview_display(config: dict[str, Any]) -> str:
+    """Route preview windows to the robot host desktop, including over SSH."""
+
+    values = config.get("host_network", {})
+    target = str(values.get("preview_target", "host")).strip().lower()
+    if target not in ("host", "session"):
+        raise CameraError("host_network.preview_target must be 'host' or 'session'")
+
+    if target == "host":
+        display = str(values.get("host_desktop_display", ":1")).strip()
+        if not display.startswith(":"):
+            raise CameraError("host_network.host_desktop_display must look like ':1'")
+        display_number = display.removeprefix(":").split(".", 1)[0]
+        socket_path = Path("/tmp/.X11-unix") / f"X{display_number}"
+        if not socket_path.exists():
+            raise CameraError(
+                f"Host preview display is unavailable: X11 socket not found: {socket_path}"
+            )
+        os.environ["DISPLAY"] = display
+        configured_xauthority = str(values.get("host_xauthority", "")).strip()
+        xauthority = (
+            Path(configured_xauthority).expanduser()
+            if configured_xauthority
+            else Path(f"/run/user/{os.getuid()}/gdm/Xauthority")
+        )
+        if not xauthority.is_file():
+            raise CameraError(f"Host preview Xauthority not found: {xauthority}")
+        os.environ["XAUTHORITY"] = str(xauthority)
+    else:
+        display = str(os.environ.get("DISPLAY", "")).strip()
+        if not display:
+            raise CameraError(
+                "Session preview requested but DISPLAY is empty; use preview_target: host "
+                "or enable X11 forwarding"
+            )
+
+    font_dir = Path("/usr/share/fonts/truetype/dejavu")
+    if font_dir.is_dir():
+        # OpenCV's Qt wheel may pre-populate this with a bundled directory that
+        # does not exist. Always prefer the host's installed DejaVu fonts.
+        os.environ["QT_QPA_FONTDIR"] = str(font_dir)
+
+    xdpyinfo = shutil.which("xdpyinfo")
+    if xdpyinfo is None:
+        raise CameraError("xdpyinfo is required to validate the preview display")
+    try:
+        check = subprocess.run(
+            [xdpyinfo],
+            env=os.environ.copy(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CameraError(f"Failed to validate preview display {display}: {exc}") from exc
+    if check.returncode != 0:
+        detail = check.stderr.strip() or f"xdpyinfo exited {check.returncode}"
+        raise CameraError(f"Cannot open preview display {display}: {detail}")
+
+    print(
+        f"Camera previews will open on display {display} "
+        f"(target={target}, XAUTHORITY={os.environ.get('XAUTHORITY', 'session')})",
+        flush=True,
+    )
+    return display
 
 
 @dataclass(frozen=True)
@@ -86,7 +159,7 @@ class CameraFrame:
 
 
 class RealSenseCamera:
-    """Continuously captures the latest D435 frame outside the servo loop."""
+    """Continuously captures RealSense RGB frames outside the servo loop."""
 
     def __init__(self, config: CameraConfig) -> None:
         self.config = config

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Create or repair the lightweight Dobot VR teleoperation environment.
+# Create or repair the lightweight Dobot VR and single-master teleoperation environment.
 # Usage:
 #   bash install_dobot_vr_teleop.sh
 #   bash install_dobot_vr_teleop.sh --dry-run
@@ -16,8 +16,11 @@ usage() {
     cat <<'EOF'
 用法：bash install_dobot_vr_teleop.sh [--dry-run] [--help]
 
-创建或修复：
+创建或修复 VR/单主手遥操作与数据采集环境：
   /home/dobot/miniforge3/envs/dobot-vr-teleop
+
+安装内容包括 Quest 3 VR 通信、Dynamixel USB 主手、
+Intel RealSense D405+D435 双相机、OpenCV 预览和 Dobot TCP 控制依赖。
 
 选项：
   --dry-run  只显示将执行的命令，不修改环境
@@ -107,8 +110,12 @@ run "$ENV_PYTHON" -m pip install "${PIP_OPTIONS[@]}" \
     "numpy==2.4.6" \
     "PyYAML==6.0.3" \
     "requests==2.34.2" \
+    "pyserial==3.5" \
+    "dynamixel-sdk==3.8.4" \
     "opencv-python==5.0.0.93" \
     "pyrealsense2==2.58.2.10647"
+
+run "$ENV_PYTHON" -m pip check
 
 if [[ "$DRY_RUN" == true ]]; then
     printf '\nDry-run 完成：没有修改 Conda 环境。\n'
@@ -117,21 +124,62 @@ fi
 
 "$ENV_PYTHON" - <<'PY'
 from importlib.metadata import version
+from pathlib import Path
+import sys
 
 import cv2
+import dynamixel_sdk
 import numpy
 import pyrealsense2
 import requests
+import serial
 import yaml
 
+project_root = Path.cwd()
+sys.path.insert(0, str(project_root / "Data_Collections"))
+
+from master_teleop.core.config import load_master_project_config
+from master_teleop.devices.master_hand import MasterHandConfig
+from vr_teleop.devices.camera import CameraConfig
+
+project_config = load_master_project_config(project_root / "config")
+master_config = MasterHandConfig.from_mapping(project_config.get("master_hand"))
+CameraConfig.from_mapping(project_config.get("camera"))
+
 print("\n依赖验证通过：")
-for package in ("numpy", "PyYAML", "requests", "opencv-python", "pyrealsense2"):
+for package in (
+    "numpy",
+    "PyYAML",
+    "requests",
+    "pyserial",
+    "dynamixel-sdk",
+    "opencv-python",
+    "pyrealsense2",
+):
     print(f"  {package}=={version(package)}")
 print(f"  OpenCV GUI backend available: {'GUI:' in cv2.getBuildInformation()}")
+print(
+    "  Master-hand config: "
+    f"device={master_config.device}, side={master_config.side}, "
+    f"profiles={','.join(master_config.profiles)}"
+)
+print("  Project module imports: VR teleop + single-master teleop OK")
 PY
+
+if [[ " $(id -nG) " == *" dialout "* ]]; then
+    printf '\n主手串口权限：当前用户已属于 dialout 组。\n'
+else
+    printf '\n警告：当前用户不在 dialout 组，USB 主手可能报 Permission denied。\n'
+    printf '请执行： sudo usermod -aG dialout "$USER"\n'
+    printf '然后注销桌面或退出 SSH 并重新登录。\n'
+fi
 
 printf '\n安装完成。打开新终端后运行：\n'
 printf '  source %q\n' "$CONDA_ROOT/etc/profile.d/conda.sh"
 printf '  conda activate %q\n' "$ENV_NAME"
 printf '  cd %q\n' "$PROJECT_ROOT"
+printf '\nVR 遥操作入口：\n'
 printf '  python Data_Collections/vr_teleop/collection/start_vr_teleop.py --help\n'
+printf '\n单主手验证与采集入口：\n'
+printf '  python Data_Collections/master_teleop/collection/1_find_port.py --help\n'
+printf '  python Data_Collections/master_teleop/collection/run_control.py --help\n'

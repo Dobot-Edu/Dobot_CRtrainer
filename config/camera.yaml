@@ -3,40 +3,34 @@ camera:
   enabled: true
   # Stop teleoperation if the visual stream cannot be started or is lost.
   required: true
-  # Supported drivers:
-  #   realsense: Intel RealSense via pyrealsense2.
-  #   opencv: UVC cameras such as Logitech C930e via /dev/video*.
-  driver: "opencv"
-  # Stable Linux device path for the current Logitech Webcam C930e.
-  device: "/dev/v4l/by-id/usb-046d_Logitech_Webcam_C930e_EC903A2E-video-index0"
-  # RealSense-only serial. Leave empty for opencv cameras.
-  serial: ""
-  # Default collection mode: compact 4:3 RGB frames for efficient ACT
-  # training. MJPG keeps this UVC stream stable at 30 fps.
+  # Top camera: Intel RealSense D405, bound by stable hardware serial.
+  driver: "realsense"
+  device: ""
+  serial: "260322270720"
+  # Match the wrist stream for aligned dual-camera training data.
   width: 640
   height: 480
   fps: 30
-  fourcc: "MJPG"
+  fourcc: ""
   enable_depth: false
-  # Keep GUI work out of the 50 Hz servo loop during normal collection.
-  # Pass --camera-preview for a visual check before recording when needed.
+  # Base configuration value. The VR and master collection launchers enable
+  # both preview windows by default; pass --no-camera-preview to hide them.
   preview: false
   startup_timeout_s: 8.0
   frame_timeout_ms: 1000
   max_consecutive_timeouts: 5
 
-# Both cameras are recorded under stable top/wrist names. Preview windows are
-# opt-in so image display cannot reduce teleoperation responsiveness.
+# Both RealSense cameras are recorded and previewed under stable top/wrist names.
 cameras:
   wrist:
     name: "wrist"
     enabled: true
     required: true
     driver: "realsense"
-    # Stable RealSense D435 serial reported by the librealsense SDK.
+    # Wrist camera: Intel RealSense D405, bound by stable hardware serial.
     # The /dev/video* indices are not stable and therefore are intentionally unused.
     device: ""
-    serial: "243222075525"
+    serial: "230422270800"
     # Match the primary collection stream for consistent dual-camera preview.
     width: 640
     height: 480

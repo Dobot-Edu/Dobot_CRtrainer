@@ -54,6 +54,8 @@ class RobotState:
     enabled: bool = False
     pose_mm_deg: Pose6 = field(default_factory=lambda: [350.0, 0.0, 350.0, 180.0, 0.0, 0.0])
     q_actual_deg: list[float] = field(default_factory=list)
+    q_target_deg: list[float] = field(default_factory=list)
+    target_pose_mm_deg: Pose6 = field(default_factory=list)
     q_actual_velocity_deg_s: list[float] = field(default_factory=list)
     tcp_speed_actual_mm_deg_s: list[float] = field(default_factory=list)
     tcp_force_actual: list[float] = field(default_factory=list)
@@ -74,5 +76,8 @@ class RobotState:
 class TeleopCommand:
     allowed: bool
     target_pose_mm_deg: Pose6 | None = None
+    target_joint_positions_deg: list[float] | None = None
     reason: str = ""
     clutched: bool = False
+    control_source: str = "vr"
+    control_mode: str = "servo_p"

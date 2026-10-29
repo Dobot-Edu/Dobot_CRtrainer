@@ -8,10 +8,11 @@ data_collection:
   image_jpeg_quality: 90
   # Buffers image writes away from the 50 Hz robot control loop.
   image_queue_size: 120
-  # Pressing B to stop an episode immediately starts a safe MovJ return.
+  # Pressing B to stop an episode starts an absolute joint-mode MovJ return.
   auto_restore_after_episode: true
   restore_acceleration_percent: 10
   restore_velocity_percent: 10
   restore_timeout_s: 60.0
+  restore_joint_tolerance_deg: 1.0
   restore_position_tolerance_mm: 1.5
   restore_orientation_tolerance_deg: 2.0
