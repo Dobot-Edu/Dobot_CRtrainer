@@ -43,11 +43,14 @@ def main() -> int:
 
     config = load_project_config(args.config_dir)
     network = config["robot_network"]
+    robot_config = config["robot"]
     robot = DobotTcpAdapter(
         args.robot_ip or network["ip"],
         int(network["dashboard_port"]),
         int(network["move_port"]),
         int(network["feedback_port"]),
+        user_index=int(robot_config.get("user_index", 0)),
+        tool_index=int(robot_config.get("tool_index", 0)),
     )
     try:
         robot.connect()

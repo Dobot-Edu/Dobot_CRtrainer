@@ -7,8 +7,7 @@ if __name__ == "__main__" and not __package__:
     raise SystemExit(
         "This is an internal collection module, not a command-line entry point.\n"
         "Run data collection from the project root with:\n"
-        "  python Data_Collections/vr_teleop/collection/start_vr_teleop.py "
-        "--record-data"
+        "  python Data_Collections/vr_teleop/collection/start_vr_teleop.py"
     )
 
 from ..recording.dataset_recorder import EpisodeRecorder

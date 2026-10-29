@@ -4,7 +4,7 @@
 #   - Ubuntu Linux、Python 3.12
 #   - NVIDIA RTX 4090
 #   - 使用 CUDA 进行训练和推理
-#   - Logitech 顶部相机和 Intel RealSense D435 腕部相机
+#   - Intel RealSense D405 顶部相机和 D435 腕部相机
 #
 # 推荐安装命令：
 #   conda activate dobot-lerobot
@@ -23,9 +23,13 @@ torchvision==0.22.1+cu118
 numpy==2.2.6
 PyYAML==6.0.3
 requests==2.34.2
+pyserial==3.5
+dynamixel-sdk==3.8.4
 opencv-python==4.13.0.92
+# Dobot_Train/train.py uses Pillow to generate dependency-free PNG metric plots.
+Pillow==12.2.0
 
-# Intel RealSense D435 腕部相机。
+# Intel RealSense D405 顶部相机和 D435 腕部相机。
 pyrealsense2==2.58.2.10647
 
 # 以可编辑模式安装本项目内的 LeRobot 源码。

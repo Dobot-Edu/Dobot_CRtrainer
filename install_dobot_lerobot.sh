@@ -20,7 +20,7 @@ usage() {
   /home/dobot/miniforge3/envs/dobot-lerobot
 
 安装内容包括 CUDA 版 PyTorch、本项目本地 LeRobot 源码、数据转换、
-ACT/Pi0/Pi0.5 训练与推理依赖，以及 Logitech/D435 双相机依赖。
+ACT/Pi0/Pi0.5 训练与推理依赖，以及 RealSense D405+D435 双相机依赖。
 
 选项：
   --dry-run  只显示将执行的命令，不修改环境
@@ -138,11 +138,13 @@ from importlib.metadata import version
 
 import cv2
 import datasets
+import dynamixel_sdk
 import lerobot
 import numpy
 import pyarrow
 import pyrealsense2
 import requests
+import serial
 import sentencepiece
 import torch
 import torchvision
@@ -160,6 +162,8 @@ for package in (
     "numpy",
     "opencv-python",
     "pyrealsense2",
+    "pyserial",
+    "dynamixel-sdk",
 ):
     print(f"  {package}=={version(package)}")
 print(f"  PyTorch CUDA build: {torch.version.cuda}")
@@ -176,3 +180,5 @@ printf '  source %q\n' "$CONDA_ROOT/etc/profile.d/conda.sh"
 printf '  conda activate %q\n' "$ENV_NAME"
 printf '  cd %q\n' "$PROJECT_ROOT"
 printf '  python Dobot_Train/train.py --dry-run\n'
+printf '\n真机推理前请先检查 scripts/Dobot_inference.py 中的模型、权重、\n'
+printf '任务提示词与 EXECUTE 安全开关，不要在安装后直接启动真机。\n'

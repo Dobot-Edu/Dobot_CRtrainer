@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from .models import Pose6, RobotState, VRInput
+
+
+class SafetyInput(Protocol):
+    @property
+    def age_s(self) -> float: ...
+
+    tracking_valid: bool
+    right_grip: float
 
 
 @dataclass
@@ -48,14 +57,15 @@ class SafetySupervisor:
 
     def check(
         self,
-        vr: VRInput | None,
+        vr: VRInput | SafetyInput | None,
         robot: RobotState,
         require_deadman: bool | None = None,
+        source_name: str = "vr",
     ) -> SafetyDecision:
         if vr is None:
-            return SafetyDecision(False, "waiting_for_vr")
+            return SafetyDecision(False, f"waiting_for_{source_name}")
         if vr.age_s > self.watchdog_timeout_s:
-            return SafetyDecision(False, f"vr_watchdog_timeout:{vr.age_s:.3f}s")
+            return SafetyDecision(False, f"{source_name}_watchdog_timeout:{vr.age_s:.3f}s")
         if not vr.tracking_valid:
             return SafetyDecision(False, "controller_not_tracked")
         deadman_required = self.require_deadman if require_deadman is None else require_deadman

@@ -8,7 +8,12 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "Data_Collections"))
 
 from vr_teleop.core.app import TeleopApp, TeleopRuntimeConfig
-from vr_teleop.devices.camera import CameraConfig, CameraGroup, create_camera
+from vr_teleop.devices.camera import (
+    CameraConfig,
+    CameraGroup,
+    configure_preview_display,
+    create_camera,
+)
 from vr_teleop.core.config import load_project_config
 from vr_teleop.collection.vr_teleop import create_vr_teleop_collection
 from vr_teleop.control.mapper import RelativeVRMapper
@@ -67,10 +72,22 @@ def main() -> None:
         default=None,
         help="Override the Dobot global SpeedFactor percentage in execute mode.",
     )
-    parser.add_argument(
+    recording = parser.add_mutually_exclusive_group()
+    recording.add_argument(
         "--record-data",
+        dest="record_data",
         action="store_true",
-        help="Enable synchronized VR and robot episode recording; press Quest B to start/stop.",
+        default=True,
+        help=(
+            "Enable synchronized VR and robot episode recording; press Quest B "
+            "to start/stop. Enabled by default."
+        ),
+    )
+    recording.add_argument(
+        "--no-record-data",
+        dest="record_data",
+        action="store_false",
+        help="Run VR teleoperation without creating or recording episodes.",
     )
     parser.add_argument(
         "--no-auto-restore",
@@ -97,16 +114,27 @@ def main() -> None:
         action="store_true",
         help="Disable the configured camera for this run.",
     )
-    parser.add_argument(
+    camera_preview = parser.add_mutually_exclusive_group()
+    camera_preview.add_argument(
         "--camera-preview",
+        dest="camera_preview",
         action="store_true",
-        help="Show the continuously captured camera RGB stream.",
+        default=True,
+        help="Show the top and wrist camera RGB streams. Enabled by default.",
+    )
+    camera_preview.add_argument(
+        "--no-camera-preview",
+        dest="camera_preview",
+        action="store_false",
+        help="Capture both cameras without opening preview windows.",
     )
     args = parser.parse_args()
     if args.enable_robot and args.robot_mode == "dobot" and not args.execute:
         parser.error("--enable-robot requires --execute when using --robot-mode dobot")
 
     config = load_project_config(args.config_dir)
+    if args.camera_preview and not args.no_camera:
+        configure_preview_display(config)
     network = config["robot_network"]
     robot_cfg = config["robot"]
     calibration_cfg = config.get("calibration", {})
@@ -149,6 +177,10 @@ def main() -> None:
             and collection_cfg.get("auto_restore_after_episode", True)
             and not args.no_auto_restore
         ),
+        initial_joints_deg=[
+            float(value)
+            for value in calibration_cfg["robot_initial_joints_deg"]
+        ],
         initial_pose_mm_deg=[
             float(value)
             for value in calibration_cfg.get(
@@ -163,6 +195,9 @@ def main() -> None:
             collection_cfg.get("restore_velocity_percent", 10)
         ),
         restore_timeout_s=float(collection_cfg.get("restore_timeout_s", 60.0)),
+        restore_joint_tolerance_deg=float(
+            collection_cfg.get("restore_joint_tolerance_deg", 1.0)
+        ),
         restore_position_tolerance_mm=float(
             collection_cfg.get("restore_position_tolerance_mm", 1.5)
         ),
@@ -180,6 +215,8 @@ def main() -> None:
             move_port=int(network["move_port"]),
             feedback_port=int(network["feedback_port"]),
             lock_j6=bool(robot_cfg.get("lock_j6", False) and not args.no_j6_lock),
+            user_index=int(robot_cfg.get("user_index", 0)),
+            tool_index=int(robot_cfg.get("tool_index", 0)),
         )
 
     gripper = None

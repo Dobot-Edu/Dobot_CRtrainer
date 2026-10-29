@@ -18,7 +18,7 @@ from ..control.models import RobotState, TeleopCommand, VRInput
 from ..devices.camera import CameraFrame
 
 
-SCHEMA_VERSION = "dobot-vr-teleop-episode-v5"
+SCHEMA_VERSION = "dobot-teleop-episode-v6"
 
 
 @dataclass(frozen=True)
@@ -99,7 +99,10 @@ class EpisodeRecorder:
     def episode_dir(self) -> Path | None:
         return self._episode_dir
 
-    def handle_record_button(self, vr: VRInput | None) -> RecorderEvent | None:
+    def handle_record_button(
+        self,
+        vr: Any | None,
+    ) -> RecorderEvent | None:
         pressed = bool(getattr(vr, self.record_button, False)) if vr is not None else False
         rising = pressed and not self._last_record_button
         self._last_record_button = pressed
@@ -155,6 +158,7 @@ class EpisodeRecorder:
                 "robot_joint_velocity": "deg/s",
                 "vr_position": "m",
                 "vr_rotation": "quaternion_xyzw",
+                "master_joint_position": "rad",
                 "gripper_position": "device_units_0_1000",
             },
             "config_snapshot": self.config_snapshot,
@@ -164,7 +168,7 @@ class EpisodeRecorder:
 
     def record(
         self,
-        vr: VRInput | None,
+        vr: Any | None,
         robot: RobotState,
         command: TeleopCommand,
         dt_s: float,
@@ -218,6 +222,14 @@ class EpisodeRecorder:
                 "vr_tracking_valid": bool(vr.tracking_valid),
                 "vr_source_timestamp_s": float(vr.timestamp),
                 "vr_packet_age_s": float(vr.age_s),
+                "master_joint_positions_rad": _optional_vector(
+                    getattr(vr, "joint_positions_rad", None), 6
+                ),
+                "master_gripper_open": _optional_float(
+                    getattr(vr, "gripper_open", None)
+                ),
+                "master_buttons_raw": list(getattr(vr, "buttons_raw", [])),
+                "master_profile": str(getattr(vr, "profile_name", "")),
                 # Keep the legacy primary-camera fields so older analysis tools
                 # can still read v4 episodes. New converters use cameras.top and
                 # cameras.wrist below.
@@ -230,9 +242,14 @@ class EpisodeRecorder:
             },
             "action": {
                 "target_tcp_pose_mm_deg": _vector(command.target_pose_mm_deg, 6),
+                "target_joint_positions_deg": _optional_vector(
+                    command.target_joint_positions_deg, 6
+                ),
                 "executed": bool(execute),
                 "clutched": bool(command.clutched),
                 "reason": command.reason,
+                "control_source": command.control_source,
+                "control_mode": command.control_mode,
                 "gripper_desired_closed": gripper.get("desired_closed"),
                 "gripper_applied_closed": gripper.get("applied_closed"),
                 "gripper_target_position": gripper.get("target_position"),
@@ -405,6 +422,12 @@ class EpisodeRecorder:
             "observation_vr_right_thumbstick": _frame_vectors(
                 frames, "observation", "vr_right_thumbstick", 2
             ),
+            "observation_master_joint_positions_rad": _frame_vectors(
+                frames, "observation", "master_joint_positions_rad", 6
+            ),
+            "observation_master_gripper_open": _frame_scalars(
+                frames, "observation", "master_gripper_open"
+            ),
             "observation_camera_frame_sequence": _frame_scalars(
                 frames, "observation", "camera_frame_sequence"
             ),
@@ -422,6 +445,15 @@ class EpisodeRecorder:
             ),
             "action_target_tcp_pose_mm_deg": _frame_vectors(
                 frames, "action", "target_tcp_pose_mm_deg", 6
+            ),
+            "action_target_joint_positions_deg": _frame_vectors(
+                frames, "action", "target_joint_positions_deg", 6
+            ),
+            "action_control_source": _frame_strings(
+                frames, "action", "control_source"
+            ),
+            "action_control_mode": _frame_strings(
+                frames, "action", "control_mode"
             ),
             "action_executed": np.asarray(
                 [frame["action"]["executed"] for frame in frames], dtype=np.bool_
@@ -614,8 +646,8 @@ def _vector(values: list[float], size: int) -> list[float]:
     return result
 
 
-def _optional_vector(values: list[float], size: int) -> list[float] | None:
-    return _vector(values, size) if len(values) >= size else None
+def _optional_vector(values: list[float] | None, size: int) -> list[float] | None:
+    return _vector(values, size) if values is not None and len(values) >= size else None
 
 
 def _optional_float(value: float | None) -> float | None:

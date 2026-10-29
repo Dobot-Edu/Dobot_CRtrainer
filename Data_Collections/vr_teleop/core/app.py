@@ -21,10 +21,12 @@ class TeleopRuntimeConfig:
     execute: bool = False
     enable_robot: bool = False
     auto_restore_after_episode: bool = False
+    initial_joints_deg: list[float] | None = None
     initial_pose_mm_deg: list[float] | None = None
     restore_acceleration_percent: int = 10
     restore_velocity_percent: int = 10
     restore_timeout_s: float = 60.0
+    restore_joint_tolerance_deg: float = 1.0
     restore_position_tolerance_mm: float = 1.5
     restore_orientation_tolerance_deg: float = 2.0
 
@@ -237,11 +239,12 @@ class TeleopApp:
         if not self.runtime.auto_restore_after_episode:
             return
 
-        target = self.runtime.initial_pose_mm_deg
-        if target is None or len(target) != 6:
+        target_joints = self.runtime.initial_joints_deg
+        if target_joints is None or len(target_joints) != 6:
             raise RuntimeError(
-                "Automatic restore requires a six-value initial_pose_mm_deg"
+                "Automatic restore requires a six-value initial_joints_deg"
             )
+        target_pose = self.runtime.initial_pose_mm_deg
 
         self.mapper.release_clutch()
         if not self.runtime.execute:
@@ -250,7 +253,7 @@ class TeleopApp:
 
         print(
             "[restore] Episode saved. Stopping VR servo and returning to "
-            f"initial pose: {[round(value, 3) for value in target]}",
+            f"absolute initial joints: {[round(value, 3) for value in target_joints]}",
             flush=True,
         )
         if self._was_commanding:
@@ -261,10 +264,10 @@ class TeleopApp:
         self._was_commanding = False
 
         state = self.robot.state()
-        position_error, orientation_error = _pose_error(state.pose_mm_deg, target)
-        if not _pose_reached(position_error, orientation_error, self.runtime):
-            self.robot.move_j_pose(
-                target,
+        joint_error = _joint_error(state.q_actual_deg, target_joints)
+        if joint_error > self.runtime.restore_joint_tolerance_deg:
+            self.robot.move_j_joint(
+                target_joints,
                 acceleration=self.runtime.restore_acceleration_percent,
                 velocity=self.runtime.restore_velocity_percent,
             )
@@ -274,24 +277,29 @@ class TeleopApp:
             while time.monotonic() < deadline:
                 time.sleep(0.1)
                 state = self.robot.state()
-                position_error, orientation_error = _pose_error(
-                    state.pose_mm_deg,
-                    target,
-                )
+                joint_error = _joint_error(state.q_actual_deg, target_joints)
                 if state.error_status or state.collision_state:
                     raise RuntimeError(
                         "Automatic restore stopped by robot state: "
                         f"error={state.error_status}, "
                         f"collision={state.collision_state}"
                     )
-                if _pose_reached(position_error, orientation_error, self.runtime):
+                if joint_error <= self.runtime.restore_joint_tolerance_deg:
                     break
                 now = time.monotonic()
                 if now >= next_status_log:
+                    pose_status = ""
+                    if target_pose is not None and len(target_pose) == 6:
+                        position_error, orientation_error = _pose_error(
+                            state.pose_mm_deg, target_pose
+                        )
+                        pose_status = (
+                            f" position_error={position_error:.2f}mm"
+                            f" orientation_error={orientation_error:.2f}deg"
+                        )
                     print(
                         "[restore] moving "
-                        f"position_error={position_error:.2f}mm "
-                        f"orientation_error={orientation_error:.2f}deg",
+                        f"joint_error={joint_error:.2f}deg{pose_status}",
                         flush=True,
                     )
                     next_status_log = now + 1.0
@@ -304,7 +312,7 @@ class TeleopApp:
 
         self.mapper.release_clutch()
         print(
-            "[restore] Initial pose reached. Release Grip, reposition the "
+            "[restore] Absolute initial joints reached. Release Grip, reposition the "
             "controller, then press B to start the next episode.",
             flush=True,
         )
@@ -357,6 +365,12 @@ def _pose_error(actual: list[float], target: list[float]) -> tuple[float, float]
         for index in range(3, 6)
     )
     return position_error, orientation_error
+
+
+def _joint_error(actual: list[float], target: list[float]) -> float:
+    if len(actual) < 6 or len(target) != 6:
+        raise RuntimeError("Automatic restore requires six actual and target joints")
+    return max(abs(actual[index] - target[index]) for index in range(6))
 
 
 def _pose_reached(

@@ -16,10 +16,13 @@ time; it is not pretending that a TCP command is a joint command.
 """
 
 import argparse
+import csv
 import json
 import math
+import random
 import shutil
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,19 +41,57 @@ ROOT = Path(__file__).resolve().parents[1]
 # <DATASET_DIR>/<TASK_NAME>/episodes/episode_xxx 等采集回合。
 DATASET_DIR = "datasets"
 
-# 本次转换的任务目录名，必须与 DATASET_DIR 下的实际文件夹名称一致。
-TASK_NAME = "test123"
+# 本次转换读取的原始数据任务名。该模块保持独立，拆分使用时可单独修改。
+TASK_NAME = "cosmetics_quality"
 
 # 转换后的 LeRobot 数据集保存目录，包含 data、meta、videos 等内容。
-OUTPUT_DIR = "datasets/test123/test123_lerobot"
+OUTPUT_DIR = f"datasets/{TASK_NAME}/{TASK_NAME}_lerobot"
 
 # 写入 LeRobot 元数据的数据集标识。使用本地数据时可采用
 # local/<名称>；训练脚本中的 dataset.repo_id 必须与这里保持一致。
-REPO_ID = "local/dobot_cr5a_test123"
+REPO_ID = f"local/dobot_cr5a_{TASK_NAME}"
 
 # 每一帧关联的自然语言任务描述，供 Pi0、Pi0.5、VLA 等语言条件策略使用。
 # 同一任务的转换、训练和推理阶段应使用语义一致的提示词。
-TASK_PROMPT = "Pick up the gear and place it at the target position."
+TASK_PROMPT = (
+    "Place one cosmetic jar from the tray on the right onto the electronic scale "
+    "for weighing. Wait until the weight reading stabilizes, then sort the jar "
+    "according to the indicator light: if the light is green, place the jar in "
+    "the lower-left tray; if the light is yellow, place it in the upper-left tray."
+)
+
+# True：裸命令运行时，根据夹爪事件和最终放置位置自动写入下方五条阶段标签。
+# 这些提示词必须与 scripts/Dobot_inference.py 的分阶段提示词逐字一致。
+ENABLE_COSMETICS_STAGE_LABELS = True
+
+COSMETICS_STAGE_1_TASK = (
+    "Pick up one cosmetic jar from the tray on the right and place it on the "
+    "electronic scale. The destination for this stage is the electronic scale."
+)
+COSMETICS_STAGE_2_TASKS = {
+    "GREEN": (
+        "The indicator light is GREEN. GREEN means the destination is the LOWER-LEFT tray. "
+        "Pick up the cosmetic jar from the electronic scale and prepare to move it toward "
+        "the LOWER-LEFT tray. Do not move it to the UPPER-LEFT tray."
+    ),
+    "YELLOW": (
+        "The indicator light is YELLOW. YELLOW means the destination is the UPPER-LEFT tray. "
+        "Pick up the cosmetic jar from the electronic scale and prepare to move it toward "
+        "the UPPER-LEFT tray. Do not move it to the LOWER-LEFT tray."
+    ),
+}
+COSMETICS_STAGE_3_TASKS = {
+    "GREEN": (
+        "The indicator light is GREEN. GREEN always corresponds to the LOWER-LEFT tray. "
+        "Move the cosmetic jar from the electronic scale to the LOWER-LEFT tray and release "
+        "it in the LOWER-LEFT tray. Do not place it in the UPPER-LEFT tray."
+    ),
+    "YELLOW": (
+        "The indicator light is YELLOW. YELLOW always corresponds to the UPPER-LEFT tray. "
+        "Move the cosmetic jar from the electronic scale to the UPPER-LEFT tray and release "
+        "it in the UPPER-LEFT tray. Do not place it in the LOWER-LEFT tray."
+    ),
+}
 
 # True：若 OUTPUT_DIR 已存在，则允许删除并重新生成；旧结果会被覆盖。
 # False：若输出目录已存在则停止转换，可用于防止误删已有数据。
@@ -65,6 +106,7 @@ DEFAULT_MAX_GAP_S = 0.25
 DEFAULT_MIN_FRAMES = 20
 DEFAULT_IMAGE_WIDTH = 640
 DEFAULT_IMAGE_HEIGHT = 480
+DEFAULT_VIDEO_ENCODING_BATCH_SIZE = 3
 DEFAULT_MAX_CAMERA_SKEW_MS = 40.0
 DEFAULT_MAX_CAMERA_AGE_MS = 60.0
 DEFAULT_MAX_CAMERA_REPEAT_RATE = 0.20
@@ -74,10 +116,15 @@ DEFAULT_MAX_ANGLE_LEAD_DEG = 10.0
 DEFAULT_MIN_FEEDBACK_COVERAGE = 1.0
 DEFAULT_MIN_EXECUTED_RATIO = 1.0
 DEFAULT_MIN_SAFETY_CLEAN_RATIO = 1.0
+DEFAULT_GRIPPER_OPEN_THRESHOLD = 0.5
+DEFAULT_GRIPPER_DEBOUNCE_FRAMES = 5
+DEFAULT_VALIDATION_FRACTION = 0.10
+DEFAULT_SPLIT_SEED = 20260903
+DEFAULT_AUDIT_EPISODES = 10
+DEFAULT_MIN_DESTINATION_CLUSTER_GAP_MM = 100.0
 # All demonstrations start near this calibrated TCP orientation. Anchor every
 # episode to the same equivalent Euler branch before computing dataset stats.
 DEFAULT_TCP_EULER_REFERENCE_DEG = np.asarray([180.0, 0.0, -90.0], dtype=np.float64)
-
 
 @dataclass
 class PreparedSegment:
@@ -89,6 +136,22 @@ class PreparedSegment:
     resampled_indices: list[int]
     max_source_gap_s: float
     timestamp_repairs: int
+
+
+@dataclass
+class CosmeticsSegmentLabel:
+    source_episode: str
+    segment_index: int
+    color: str
+    destination: str
+    split: str
+    first_grasp_source_frame: int
+    scale_release_source_frame: int
+    second_grasp_source_frame: int
+    final_release_source_frame: int
+    destination_pose_mm_deg: list[float]
+    destination_cluster_y_mm: float
+    output_episode_index: int = -1
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +171,52 @@ def parse_args() -> argparse.Namespace:
             "Optional natural-language task stored in every LeRobot frame. "
             "Use this for VLA training, for example 'Pick up the gear and place it in the tray.'."
         ),
+    )
+    parser.add_argument(
+        "--cosmetics-stage-labels",
+        action=argparse.BooleanOptionalAction,
+        default=ENABLE_COSMETICS_STAGE_LABELS,
+        help=(
+            "Assign one of five cosmetics task prompts per frame from debounced gripper "
+            "events and the demonstrated final tray destination. Keeps each trajectory "
+            "as one continuous episode. Use --no-cosmetics-stage-labels for a fixed prompt."
+        ),
+    )
+    parser.add_argument(
+        "--gripper-open-threshold",
+        type=float,
+        default=DEFAULT_GRIPPER_OPEN_THRESHOLD,
+        help="Normalized gripper target at or above this value is treated as open.",
+    )
+    parser.add_argument(
+        "--gripper-debounce-frames",
+        type=int,
+        default=DEFAULT_GRIPPER_DEBOUNCE_FRAMES,
+        help="Number of consecutive raw control frames required to confirm a gripper transition.",
+    )
+    parser.add_argument(
+        "--validation-fraction",
+        type=float,
+        default=DEFAULT_VALIDATION_FRACTION,
+        help="Per-color fraction reserved at the end of the output episode order for evaluation.",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=DEFAULT_SPLIT_SEED,
+        help="Reproducible seed for the color-stratified train/eval episode manifest.",
+    )
+    parser.add_argument(
+        "--audit-episodes",
+        type=int,
+        default=DEFAULT_AUDIT_EPISODES,
+        help="Number of randomly selected episodes exported as stage-boundary audit tables/images.",
+    )
+    parser.add_argument(
+        "--min-destination-cluster-gap-mm",
+        type=float,
+        default=DEFAULT_MIN_DESTINATION_CLUSTER_GAP_MM,
+        help="Minimum separation in robot Y between demonstrated upper/lower final tray clusters.",
     )
     parser.add_argument(
         "--output-dir",
@@ -146,6 +255,16 @@ def parse_args() -> argparse.Namespace:
         "--use-videos",
         action="store_true",
         help="Encode image features as LeRobot videos instead of individual images.",
+    )
+    parser.add_argument(
+        "--video-encoding-batch-size",
+        type=int,
+        default=DEFAULT_VIDEO_ENCODING_BATCH_SIZE,
+        help=(
+            "Number of episodes whose camera videos are encoded concurrently. "
+            "With two cameras, the default 3 runs up to 6 FFmpeg workers. "
+            "Use 1 for the original per-episode behavior."
+        ),
     )
     parser.add_argument(
         "--image-width",
@@ -407,6 +526,207 @@ def observed_gripper_position(
         action.get("gripper_target_position"),
     )
     return next((value for value in candidates if value is not None), None)
+
+
+def commanded_gripper_value(frame: dict[str, Any]) -> float:
+    observation = frame.get("observation", {})
+    action = frame.get("action", {})
+    value = action.get("gripper_target_position")
+    if value is None:
+        value = observation.get("gripper_target_position")
+    if value is None and action.get("gripper_desired_closed") is not None:
+        value = 0.0 if bool(action["gripper_desired_closed"]) else 1000.0
+    return gripper_value(value)
+
+
+def debounced_gripper_events(
+    frames: list[dict[str, Any]],
+    open_threshold: float,
+    debounce_frames: int,
+) -> list[tuple[int, bool, bool]]:
+    """Return (run_start, old_open, new_open) after persistence filtering."""
+    states = [commanded_gripper_value(frame) >= open_threshold for frame in frames]
+    if not states:
+        return []
+    stable = states[0]
+    candidate: bool | None = None
+    candidate_start = 0
+    candidate_count = 0
+    events: list[tuple[int, bool, bool]] = []
+    for index, state in enumerate(states[1:], start=1):
+        if state == stable:
+            candidate = None
+            candidate_count = 0
+            continue
+        if candidate is None or candidate != state:
+            candidate = state
+            candidate_start = index
+            candidate_count = 1
+        else:
+            candidate_count += 1
+        if candidate_count >= debounce_frames:
+            events.append((candidate_start, stable, state))
+            stable = state
+            candidate = None
+            candidate_count = 0
+    return events
+
+
+def cosmetics_stage_and_task(
+    label: CosmeticsSegmentLabel,
+    source_frame_index: int,
+) -> tuple[str, str]:
+    if source_frame_index <= label.scale_release_source_frame:
+        return "stage_1_right_tray_to_scale", COSMETICS_STAGE_1_TASK
+    if source_frame_index < label.second_grasp_source_frame:
+        return "stage_2_observe_and_regrasp", COSMETICS_STAGE_2_TASKS[label.color]
+    return "stage_3_scale_to_target_tray", COSMETICS_STAGE_3_TASKS[label.color]
+
+
+def nearest_resampled_frame(segment: PreparedSegment, source_frame_index: int) -> int:
+    values = np.asarray(segment.resampled_indices, dtype=np.int64)
+    return int(np.argmin(np.abs(values - source_frame_index)))
+
+
+def prepare_cosmetics_stage_labels(
+    segments: list[PreparedSegment],
+    args: argparse.Namespace,
+) -> tuple[list[PreparedSegment], dict[tuple[str, int], CosmeticsSegmentLabel], dict[str, Any]]:
+    source_counts = Counter(segment.source_episode for segment in segments)
+    split_sources = sorted(source for source, count in source_counts.items() if count != 1)
+    if split_sources:
+        raise ValueError(
+            "Cosmetics stage labeling requires one continuous segment per source episode; "
+            f"found split episodes: {split_sources[:5]}"
+        )
+
+    records: list[tuple[PreparedSegment, list[tuple[int, bool, bool]], list[float]]] = []
+    expected = [(True, False), (False, True), (True, False), (False, True)]
+    for segment in segments:
+        events = debounced_gripper_events(
+            segment.frames,
+            open_threshold=args.gripper_open_threshold,
+            debounce_frames=args.gripper_debounce_frames,
+        )
+        pattern = [(old_open, new_open) for _, old_open, new_open in events]
+        if pattern != expected:
+            readable = [
+                f"{'open' if old else 'closed'}->{'open' if new else 'closed'}@{index}"
+                for index, old, new in events
+            ]
+            raise ValueError(
+                f"Expected exactly four debounced gripper transitions in "
+                f"{segment.source_episode}, got {readable}"
+            )
+        final_release = events[3][0]
+        pose = vector(
+            segment.frames[final_release].get("action", {}).get("target_tcp_pose_mm_deg"),
+            6,
+            f"final release TCP target in {segment.source_episode}",
+        ).astype(float).tolist()
+        records.append((segment, events, pose))
+
+    destination_y = np.asarray([pose[1] for _, _, pose in records], dtype=np.float64)
+    order = np.argsort(destination_y)
+    ordered_y = destination_y[order]
+    gaps = np.diff(ordered_y)
+    if gaps.size == 0:
+        raise ValueError("At least two cosmetics episodes are required to infer tray destinations")
+    gap_index = int(np.argmax(gaps))
+    cluster_gap = float(gaps[gap_index])
+    if cluster_gap < args.min_destination_cluster_gap_mm:
+        raise ValueError(
+            f"Final tray Y clusters are separated by only {cluster_gap:.3f} mm; "
+            f"expected at least {args.min_destination_cluster_gap_mm:.3f} mm"
+        )
+    threshold_y = float((ordered_y[gap_index] + ordered_y[gap_index + 1]) / 2.0)
+
+    labels: dict[tuple[str, int], CosmeticsSegmentLabel] = {}
+    by_color: dict[str, list[PreparedSegment]] = {"GREEN": [], "YELLOW": []}
+    for segment, events, pose in records:
+        # Site calibration verified from top-camera final-placement frames:
+        # higher robot-base Y is the LOWER-LEFT tray; lower Y is UPPER-LEFT.
+        color = "GREEN" if pose[1] > threshold_y else "YELLOW"
+        destination = "LOWER-LEFT" if color == "GREEN" else "UPPER-LEFT"
+        label = CosmeticsSegmentLabel(
+            source_episode=segment.source_episode,
+            segment_index=segment.segment_index,
+            color=color,
+            destination=destination,
+            split="",
+            first_grasp_source_frame=events[0][0],
+            scale_release_source_frame=events[1][0],
+            second_grasp_source_frame=events[2][0],
+            final_release_source_frame=events[3][0],
+            destination_pose_mm_deg=pose,
+            destination_cluster_y_mm=float(pose[1]),
+        )
+        labels[(segment.source_episode, segment.segment_index)] = label
+        by_color[color].append(segment)
+
+    green_count = len(by_color["GREEN"])
+    yellow_count = len(by_color["YELLOW"])
+    if green_count != yellow_count:
+        raise ValueError(
+            f"Color balance requirement failed: GREEN={green_count}, YELLOW={yellow_count}"
+        )
+
+    rng = random.Random(args.split_seed)
+    for values in by_color.values():
+        rng.shuffle(values)
+    eval_per_color = max(1, round(green_count * args.validation_fraction))
+    if eval_per_color >= green_count:
+        raise ValueError("Validation fraction leaves no training episodes per color")
+    train_segments: list[PreparedSegment] = []
+    eval_segments: list[PreparedSegment] = []
+    for color in ("GREEN", "YELLOW"):
+        eval_segments.extend(by_color[color][:eval_per_color])
+        train_segments.extend(by_color[color][eval_per_color:])
+    rng.shuffle(train_segments)
+    rng.shuffle(eval_segments)
+    ordered_segments = train_segments + eval_segments
+    for output_index, segment in enumerate(ordered_segments):
+        label = labels[(segment.source_episode, segment.segment_index)]
+        label.output_episode_index = output_index
+        label.split = "validation" if output_index >= len(train_segments) else "train"
+
+    cluster_counts = {
+        "GREEN": green_count,
+        "YELLOW": yellow_count,
+    }
+    summary = {
+        "enabled": True,
+        "method": "debounced_gripper_events+final_destination_y_cluster+camera_audit",
+        "gripper_open_threshold": args.gripper_open_threshold,
+        "gripper_debounce_frames": args.gripper_debounce_frames,
+        "destination_y_threshold_mm": threshold_y,
+        "destination_cluster_gap_mm": cluster_gap,
+        "color_episode_counts": cluster_counts,
+        "split_seed": args.split_seed,
+        "validation_fraction": args.validation_fraction,
+        "train_episode_counts": {
+            color: sum(
+                labels[(segment.source_episode, segment.segment_index)].split == "train"
+                for segment in by_color[color]
+            )
+            for color in ("GREEN", "YELLOW")
+        },
+        "validation_episode_counts": {
+            color: sum(
+                labels[(segment.source_episode, segment.segment_index)].split == "validation"
+                for segment in by_color[color]
+            )
+            for color in ("GREEN", "YELLOW")
+        },
+        "task_texts": [
+            COSMETICS_STAGE_1_TASK,
+            COSMETICS_STAGE_2_TASKS["GREEN"],
+            COSMETICS_STAGE_2_TASKS["YELLOW"],
+            COSMETICS_STAGE_3_TASKS["GREEN"],
+            COSMETICS_STAGE_3_TASKS["YELLOW"],
+        ],
+    }
+    return ordered_segments, labels, summary
 
 
 def numeric_summary(values: list[float]) -> dict[str, float | int | None]:
@@ -897,6 +1217,203 @@ def import_lerobot(lerobot_src: Path):
     return LeRobotDataset
 
 
+def write_cosmetics_label_artifacts(
+    output_dir: Path,
+    segments: list[PreparedSegment],
+    labels: dict[tuple[str, int], CosmeticsSegmentLabel],
+    args: argparse.Namespace,
+    task_frame_counts: Counter[str],
+    task_episode_counts: Counter[str],
+) -> None:
+    meta_dir = output_dir / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    total_frames = sum(task_frame_counts.values())
+    stats = {
+        "total_frames": total_frames,
+        "total_episodes": len(segments),
+        "tasks": [
+            {
+                "task": task,
+                "frames": frames,
+                "frame_fraction": frames / total_frames if total_frames else 0.0,
+                "episodes": task_episode_counts[task],
+                "episode_fraction": task_episode_counts[task] / len(segments),
+            }
+            for task, frames in task_frame_counts.items()
+        ],
+        "stage_frame_counts": {
+            "stage_1_right_tray_to_scale": task_frame_counts[COSMETICS_STAGE_1_TASK],
+            "stage_2_observe_and_regrasp": sum(
+                task_frame_counts[task] for task in COSMETICS_STAGE_2_TASKS.values()
+            ),
+            "stage_3_scale_to_target_tray": sum(
+                task_frame_counts[task] for task in COSMETICS_STAGE_3_TASKS.values()
+            ),
+        },
+        "color_episode_counts": {
+            color: sum(label.color == color for label in labels.values())
+            for color in ("GREEN", "YELLOW")
+        },
+        "color_frame_counts": {
+            color: sum(
+                len(segment.resampled_indices)
+                for segment in segments
+                if labels[(segment.source_episode, segment.segment_index)].color == color
+            )
+            for color in ("GREEN", "YELLOW")
+        },
+    }
+    (meta_dir / "segment_label_stats.json").write_text(
+        json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    split_manifest: dict[str, Any] = {
+        "seed": args.split_seed,
+        "validation_fraction": args.validation_fraction,
+        "train": {},
+        "validation": {},
+    }
+    for split in ("train", "validation"):
+        for color in ("GREEN", "YELLOW"):
+            split_manifest[split][color.lower()] = [
+                {
+                    "episode_index": label.output_episode_index,
+                    "source_episode": label.source_episode,
+                }
+                for label in sorted(labels.values(), key=lambda value: value.output_episode_index)
+                if label.split == split and label.color == color
+            ]
+    split_manifest["train_episode_indices"] = sorted(
+        label.output_episode_index for label in labels.values() if label.split == "train"
+    )
+    split_manifest["validation_episode_indices"] = sorted(
+        label.output_episode_index for label in labels.values() if label.split == "validation"
+    )
+    (meta_dir / "train_eval_split.json").write_text(
+        json.dumps(split_manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    label_path = meta_dir / "segment_labels.jsonl"
+    with label_path.open("w", encoding="utf-8") as handle:
+        for label in sorted(labels.values(), key=lambda value: value.output_episode_index):
+            handle.write(json.dumps(label.__dict__, ensure_ascii=False) + "\n")
+
+    audit_count = min(args.audit_episodes, len(segments))
+    rng = random.Random(args.split_seed + 1)
+    by_color = {
+        color: [
+            segment
+            for segment in segments
+            if labels[(segment.source_episode, segment.segment_index)].color == color
+        ]
+        for color in ("GREEN", "YELLOW")
+    }
+    green_audit = audit_count // 2
+    yellow_audit = audit_count - green_audit
+    selected = rng.sample(by_color["GREEN"], green_audit) + rng.sample(
+        by_color["YELLOW"], yellow_audit
+    )
+    rng.shuffle(selected)
+
+    audit_dir = meta_dir / "segment_label_audits"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_rows: list[dict[str, Any]] = []
+    for segment in selected:
+        label = labels[(segment.source_episode, segment.segment_index)]
+        stage_2_start = next(
+            index
+            for index, source_index in enumerate(segment.resampled_indices)
+            if source_index > label.scale_release_source_frame
+        )
+        stage_3_start = next(
+            index
+            for index, source_index in enumerate(segment.resampled_indices)
+            if source_index >= label.second_grasp_source_frame
+        )
+        interesting = {
+            0,
+            nearest_resampled_frame(segment, label.first_grasp_source_frame),
+            max(0, stage_2_start - 1),
+            stage_2_start,
+            (stage_2_start + stage_3_start) // 2,
+            stage_3_start,
+            nearest_resampled_frame(segment, label.final_release_source_frame),
+            len(segment.resampled_indices) - 1,
+        }
+        for output_frame_index in sorted(interesting):
+            source_frame_index = segment.resampled_indices[output_frame_index]
+            frame = segment.frames[source_frame_index]
+            stage, task = cosmetics_stage_and_task(label, source_frame_index)
+            observed = observed_gripper_position(
+                frame.get("observation", {}), frame.get("action", {})
+            )
+            audit_rows.append(
+                {
+                    "episode_index": label.output_episode_index,
+                    "source_episode": label.source_episode,
+                    "frame_index": output_frame_index,
+                    "source_frame_index": source_frame_index,
+                    "stage": stage,
+                    "color": label.color,
+                    "task": task,
+                    "commanded_gripper": commanded_gripper_value(frame),
+                    "observed_gripper": (
+                        gripper_value(observed) if observed is not None else None
+                    ),
+                }
+            )
+
+        try:
+            from PIL import Image, ImageDraw
+        except ImportError as exc:
+            raise RuntimeError("Pillow is required to write cosmetics audit images") from exc
+        moments = [
+            ("scale_release", nearest_resampled_frame(segment, label.scale_release_source_frame)),
+            ("indicator", (stage_2_start + stage_3_start) // 2),
+            ("second_grasp", stage_3_start),
+            ("final_release", nearest_resampled_frame(segment, label.final_release_source_frame)),
+        ]
+        tile_width, tile_height, header_height = 240, 180, 44
+        canvas = Image.new("RGB", (tile_width * len(moments), header_height + tile_height * 2), "white")
+        draw = ImageDraw.Draw(canvas)
+        draw.text(
+            (6, 4),
+            f"episode={label.output_episode_index} {label.source_episode} "
+            f"color={label.color} target={label.destination}",
+            fill="black",
+        )
+        for column, (moment, output_frame_index) in enumerate(moments):
+            source_frame_index = segment.resampled_indices[output_frame_index]
+            frame = segment.frames[source_frame_index]
+            draw.text((column * tile_width + 5, 24), f"{moment} f={output_frame_index}", fill="black")
+            for row, camera_name in enumerate(("top", "wrist")):
+                raw_path = image_path(frame, camera_name, segment.episode_dir)
+                if raw_path is None or not raw_path.exists():
+                    continue
+                with Image.open(raw_path) as raw_image:
+                    tile = raw_image.convert("RGB")
+                    tile.thumbnail((tile_width, tile_height))
+                    x = column * tile_width + (tile_width - tile.width) // 2
+                    y = header_height + row * tile_height + (tile_height - tile.height) // 2
+                    canvas.paste(tile, (x, y))
+        canvas.save(
+            audit_dir / f"episode-{label.output_episode_index:06d}_{label.color.lower()}.jpg",
+            quality=90,
+        )
+
+    audit_csv = audit_dir / "frame_stage_audit.csv"
+    with audit_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(audit_rows[0]))
+        writer.writeheader()
+        writer.writerows(audit_rows)
+
+    print(
+        "[labels] artifacts="
+        f"{meta_dir / 'segment_labels.jsonl'} split={meta_dir / 'train_eval_split.json'} "
+        f"audits={audit_dir}"
+    )
+
+
 def convert(args: argparse.Namespace, segments: list[PreparedSegment], output_dir: Path) -> dict[str, Any]:
     if output_dir.exists():
         if not args.overwrite:
@@ -932,19 +1449,35 @@ def convert(args: argparse.Namespace, segments: list[PreparedSegment], output_di
         robot_type="dobot_cr5a",
         use_videos=args.use_videos,
         image_writer_threads=2 if image_shapes else 0,
+        batch_encoding_size=args.video_encoding_batch_size if args.use_videos else 1,
+        # Video metadata is filled after each parallel batch. Keep every
+        # episode record buffered until finalize() so it can be updated safely.
+        metadata_buffer_size=max(10, len(segments) + 1),
     )
 
     converted_episodes: list[dict[str, Any]] = []
+    task_frame_counts: Counter[str] = Counter()
+    task_episode_counts: Counter[str] = Counter()
     try:
         for output_episode_index, segment in enumerate(segments):
             arrays = build_numeric_arrays(segment, args.include_vr_inputs)
+            label = args.cosmetics_labels.get(
+                (segment.source_episode, segment.segment_index)
+            )
+            episode_tasks: set[str] = set()
             for source_index in segment.resampled_indices:
+                if label is not None:
+                    _, frame_task = cosmetics_stage_and_task(label, source_index)
+                else:
+                    frame_task = args.task_prompt or segment.task
                 frame: dict[str, Any] = {
                     "observation.state": arrays["state"][source_index],
                     "action": arrays["action"][source_index],
                     "observation.robot_joints": arrays["joints"][source_index],
-                    "task": args.task_prompt or segment.task,
+                    "task": frame_task,
                 }
+                task_frame_counts[frame_task] += 1
+                episode_tasks.add(frame_task)
                 if args.include_vr_inputs:
                     frame["observation.vr_position"] = arrays["vr_position"][source_index]
                     frame["observation.vr_rotation"] = arrays["vr_rotation"][source_index]
@@ -964,6 +1497,19 @@ def convert(args: argparse.Namespace, segments: list[PreparedSegment], output_di
                     frame[f"observation.images.{camera_name}"] = image
                 dataset.add_frame(frame)
             dataset.save_episode()
+            for episode_task in episode_tasks:
+                task_episode_counts[episode_task] += 1
+            label_report = None
+            if label is not None:
+                label_report = {
+                    "color": label.color,
+                    "destination": label.destination,
+                    "split": label.split,
+                    "first_grasp_source_frame": label.first_grasp_source_frame,
+                    "scale_release_source_frame": label.scale_release_source_frame,
+                    "second_grasp_source_frame": label.second_grasp_source_frame,
+                    "final_release_source_frame": label.final_release_source_frame,
+                }
             converted_episodes.append(
                 {
                     "output_episode_index": output_episode_index,
@@ -972,6 +1518,7 @@ def convert(args: argparse.Namespace, segments: list[PreparedSegment], output_di
                     "frames": len(segment.resampled_indices),
                     "max_source_gap_s": segment.max_source_gap_s,
                     "timestamp_repairs": segment.timestamp_repairs,
+                    "segment_label": label_report,
                 }
             )
             print(
@@ -986,6 +1533,16 @@ def convert(args: argparse.Namespace, segments: list[PreparedSegment], output_di
         dataset.finalize()
         raise
 
+    if args.cosmetics_stage_labels:
+        write_cosmetics_label_artifacts(
+            output_dir,
+            segments,
+            args.cosmetics_labels,
+            args,
+            task_frame_counts,
+            task_episode_counts,
+        )
+
     report = {
         "converter": "Dobot_CRtrainer/scripts/convert_to_lerobot.py",
         "format": "LeRobot",
@@ -998,6 +1555,9 @@ def convert(args: argparse.Namespace, segments: list[PreparedSegment], output_di
         "state_definition": "TCP pose [mm, deg] + normalized gripper [0=closed, 1=open]",
         "action_definition": "target TCP pose [mm, deg] + normalized gripper [0=closed, 1=open]",
         "use_videos": bool(args.use_videos),
+        "video_encoding_batch_size": (
+            args.video_encoding_batch_size if args.use_videos else 1
+        ),
         "image_size": {
             "width": args.image_width,
             "height": args.image_height,
@@ -1010,6 +1570,7 @@ def convert(args: argparse.Namespace, segments: list[PreparedSegment], output_di
             "passed": not args.alignment_violations,
             "violations": args.alignment_violations,
         },
+        "cosmetics_stage_labeling": args.cosmetics_label_summary,
         "episodes": converted_episodes,
     }
     (output_dir / "conversion_report.json").write_text(
@@ -1027,6 +1588,18 @@ def main() -> int:
         raise SystemExit("--max-gap-s must be positive")
     if args.min_frames < 1:
         raise SystemExit("--min-frames must be positive")
+    if args.video_encoding_batch_size < 1:
+        raise SystemExit("--video-encoding-batch-size must be positive")
+    if not 0.0 < args.gripper_open_threshold < 1.0:
+        raise SystemExit("--gripper-open-threshold must be in (0, 1)")
+    if args.gripper_debounce_frames < 1:
+        raise SystemExit("--gripper-debounce-frames must be positive")
+    if not 0.0 < args.validation_fraction < 0.5:
+        raise SystemExit("--validation-fraction must be in (0, 0.5)")
+    if args.audit_episodes < 10 and args.cosmetics_stage_labels:
+        raise SystemExit("--audit-episodes must be at least 10 for cosmetics stage labels")
+    if args.min_destination_cluster_gap_mm <= 0.0:
+        raise SystemExit("--min-destination-cluster-gap-mm must be positive")
     if args.image_width < 1 or args.image_height < 1:
         raise SystemExit("--image-width and --image-height must be positive")
     if args.use_videos and args.no_images:
@@ -1071,6 +1644,19 @@ def main() -> int:
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if not segments:
         raise SystemExit("No usable segments found")
+    args.cosmetics_labels = {}
+    args.cosmetics_label_summary = {"enabled": False}
+    if args.cosmetics_stage_labels:
+        try:
+            segments, args.cosmetics_labels, args.cosmetics_label_summary = (
+                prepare_cosmetics_stage_labels(segments, args)
+            )
+        except ValueError as exc:
+            raise SystemExit(f"Cosmetics stage labeling failed: {exc}") from exc
+        print(
+            "[labels] summary="
+            + json.dumps(args.cosmetics_label_summary, ensure_ascii=False)
+        )
     args.alignment_quality = build_alignment_quality(
         segments,
         fps=args.fps,
@@ -1099,18 +1685,33 @@ def main() -> int:
         else dataset_root / args.task / f"{args.task}_lerobot"
     )
     print(f"[convert] output={output_dir}")
+    max_ffmpeg_workers = (
+        args.video_encoding_batch_size * len(args.camera_names) if args.use_videos else 0
+    )
     print(
         f"[convert] planned_episodes={len(segments)} fps={args.fps} "
         f"image_size={args.image_width}x{args.image_height} "
         f"cameras={','.join(args.camera_names)} "
-        f"include_vr_inputs={args.include_vr_inputs}"
+        f"include_vr_inputs={args.include_vr_inputs} "
+        f"video_batch={args.video_encoding_batch_size if args.use_videos else 1} "
+        f"max_ffmpeg_workers={max_ffmpeg_workers}"
     )
     if args.dry_run:
         for index, segment in enumerate(segments):
+            label = args.cosmetics_labels.get((segment.source_episode, segment.segment_index))
+            label_text = ""
+            if label is not None:
+                label_text = (
+                    f" color={label.color} split={label.split} "
+                    f"bounds={label.first_grasp_source_frame},"
+                    f"{label.scale_release_source_frame},"
+                    f"{label.second_grasp_source_frame},"
+                    f"{label.final_release_source_frame}"
+                )
             print(
                 f"[dry-run] {index}: source={segment.source_episode} "
                 f"segment={segment.segment_index} frames={len(segment.resampled_indices)} "
-                f"max_gap={segment.max_source_gap_s:.3f}s"
+                f"max_gap={segment.max_source_gap_s:.3f}s{label_text}"
             )
         return 0
 

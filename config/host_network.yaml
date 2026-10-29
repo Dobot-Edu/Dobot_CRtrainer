@@ -10,3 +10,10 @@ host_network:
   # Quest broadcasts discovery requests on this port.
   discovery_enabled: true
   discovery_port: 5006
+
+  # Always open camera previews on the monitor attached to the robot host.
+  # This also applies when the command is launched from an SSH terminal.
+  preview_target: "host"
+  host_desktop_display: ":1"
+  # Leave empty to use /run/user/<uid>/gdm/Xauthority automatically.
+  host_xauthority: ""
