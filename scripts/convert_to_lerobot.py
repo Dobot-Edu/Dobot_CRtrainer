@@ -65,31 +65,26 @@ TASK_PROMPT = (
 ENABLE_COSMETICS_STAGE_LABELS = True
 
 COSMETICS_STAGE_1_TASK = (
-    "Pick up one cosmetic jar from the tray on the right and place it on the "
-    "electronic scale. The destination for this stage is the electronic scale."
+    "Pick up one cosmetic jar from the tray on the right and place it on the electronic scale."
 )
 COSMETICS_STAGE_2_TASKS = {
     "GREEN": (
-        "The indicator light is GREEN. GREEN means the destination is the LOWER-LEFT tray. "
-        "Pick up the cosmetic jar from the electronic scale and prepare to move it toward "
-        "the LOWER-LEFT tray. Do not move it to the UPPER-LEFT tray."
+        "The indicator light is GREEN. Pick up the cosmetic jar from the electronic scale "
+        "and prepare to place it in the LOWER-LEFT tray."
     ),
     "YELLOW": (
-        "The indicator light is YELLOW. YELLOW means the destination is the UPPER-LEFT tray. "
-        "Pick up the cosmetic jar from the electronic scale and prepare to move it toward "
-        "the UPPER-LEFT tray. Do not move it to the LOWER-LEFT tray."
+        "The indicator light is YELLOW. Pick up the cosmetic jar from the electronic scale "
+        "and prepare to place it in the UPPER-LEFT tray."
     ),
 }
 COSMETICS_STAGE_3_TASKS = {
     "GREEN": (
-        "The indicator light is GREEN. GREEN always corresponds to the LOWER-LEFT tray. "
-        "Move the cosmetic jar from the electronic scale to the LOWER-LEFT tray and release "
-        "it in the LOWER-LEFT tray. Do not place it in the UPPER-LEFT tray."
+        "The indicator light is GREEN. Place the cosmetic jar from the electronic scale "
+        "into the LOWER-LEFT tray."
     ),
     "YELLOW": (
-        "The indicator light is YELLOW. YELLOW always corresponds to the UPPER-LEFT tray. "
-        "Move the cosmetic jar from the electronic scale to the UPPER-LEFT tray and release "
-        "it in the UPPER-LEFT tray. Do not place it in the LOWER-LEFT tray."
+        "The indicator light is YELLOW. Place the cosmetic jar from the electronic scale "
+        "into the UPPER-LEFT tray."
     ),
 }
 

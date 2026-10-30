@@ -74,28 +74,23 @@ TASK_PROMPT = (
 
 # TASK_MODE="segmented_cosmetics" 时的任务提示词。必须与分阶段数据集完全一致。
 STAGE_1_PROMPT = (
-    "Pick up one cosmetic jar from the tray on the right and place it on the "
-    "electronic scale. The destination for this stage is the electronic scale."
+    "Pick up one cosmetic jar from the tray on the right and place it on the electronic scale."
 )
 GREEN_STAGE_2_PROMPT = (
-    "The indicator light is GREEN. GREEN means the destination is the LOWER-LEFT tray. "
-    "Pick up the cosmetic jar from the electronic scale and prepare to move it toward "
-    "the LOWER-LEFT tray. Do not move it to the UPPER-LEFT tray."
+    "The indicator light is GREEN. Pick up the cosmetic jar from the electronic scale "
+    "and prepare to place it in the LOWER-LEFT tray."
 )
 YELLOW_STAGE_2_PROMPT = (
-    "The indicator light is YELLOW. YELLOW means the destination is the UPPER-LEFT tray. "
-    "Pick up the cosmetic jar from the electronic scale and prepare to move it toward "
-    "the UPPER-LEFT tray. Do not move it to the LOWER-LEFT tray."
+    "The indicator light is YELLOW. Pick up the cosmetic jar from the electronic scale "
+    "and prepare to place it in the UPPER-LEFT tray."
 )
 GREEN_STAGE_3_PROMPT = (
-    "The indicator light is GREEN. GREEN always corresponds to the LOWER-LEFT tray. "
-    "Move the cosmetic jar from the electronic scale to the LOWER-LEFT tray and release "
-    "it in the LOWER-LEFT tray. Do not place it in the UPPER-LEFT tray."
+    "The indicator light is GREEN. Place the cosmetic jar from the electronic scale "
+    "into the LOWER-LEFT tray."
 )
 YELLOW_STAGE_3_PROMPT = (
-    "The indicator light is YELLOW. YELLOW always corresponds to the UPPER-LEFT tray. "
-    "Move the cosmetic jar from the electronic scale to the UPPER-LEFT tray and release "
-    "it in the UPPER-LEFT tray. Do not place it in the LOWER-LEFT tray."
+    "The indicator light is YELLOW. Place the cosmetic jar from the electronic scale "
+    "into the UPPER-LEFT tray."
 )
 
 # 是否把模型输出发送给真实机械臂。False 使用初始位姿模拟状态，只检查
